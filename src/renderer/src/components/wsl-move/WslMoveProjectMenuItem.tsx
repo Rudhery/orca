@@ -57,7 +57,8 @@ export function WslMoveFolderWorkspaceMenuItem({
       : undefined
   })
   const target = useWslMoveTargetForPath(folder?.folderPath, !!folder)
-  return folder ? (
+  // A folder has no runtime setting to keep, so main refuses to reopen one from a mapped drive.
+  return folder && !target?.mappedDrive ? (
     <MoveItem target={target} project={{ kind: 'folder', id: folder.id }} name={folder.name} />
   ) : null
 }

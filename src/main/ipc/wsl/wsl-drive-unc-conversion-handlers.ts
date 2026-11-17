@@ -9,7 +9,7 @@ import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import type {
   WslDriveUncConversionRequest,
   WslDriveUncConversionResult,
-  WslMappedDriveMoveDue
+  WslMappedDriveRestartReport
 } from '../../../shared/wsl-move/wsl-drive-unc-conversion-types'
 import { relaunchApp } from '../../startup/quit/app-relaunch'
 import { gitExecFileAsync } from '../../git/command-runner/git-exec-file'
@@ -23,7 +23,7 @@ import { quitProcess } from '../../startup/quit/process-quit-request'
 import { startWslDriveUncConversion } from '../../wsl/filesystem/wsl-drive-unc-conversion-run'
 import {
   lastWslDriveUncConversionOutcomes,
-  takeWslMappedDriveMovesDue,
+  takeWslMappedDriveRestartReport,
   type WslDriveUncConversionOutcome
 } from '../../wsl/filesystem/wsl-drive-unc-conversion-startup'
 import { readWslMappedDriveShareNow } from '../../wsl/filesystem/wsl-mapped-drive-share'
@@ -43,7 +43,7 @@ import { readWslDistroDriveMounts } from '../../wsl/filesystem/wsl-drive-unc-mou
 export const WSL_DRIVE_UNC_CONVERSION_CHANNELS = [
   'wslDriveUnc:convert',
   'wslDriveUnc:lastOutcomes',
-  'wslDriveUnc:takeMappedDriveMovesDue',
+  'wslDriveUnc:takeMappedDriveRestartReport',
   'wslDriveUnc:listPendingRendererRewrites',
   'wslDriveUnc:recordStoreRewritten'
 ] as const
@@ -103,11 +103,13 @@ export function registerWslDriveUncConversionHandlers(
     wslHostsGateOpen() ? lastWslDriveUncConversionOutcomes() : []
   )
   ipcMain.handle(
-    'wslDriveUnc:takeMappedDriveMovesDue',
-    (event: IpcMainInvokeEvent): WslMappedDriveMoveDue[] =>
+    'wslDriveUnc:takeMappedDriveRestartReport',
+    (event: IpcMainInvokeEvent): WslMappedDriveRestartReport =>
       wslHostsGateOpen() && getTrustedUIRendererWebContents()?.id === event.sender.id
-        ? takeWslMappedDriveMovesDue()
-        : []
+        ? takeWslMappedDriveRestartReport(
+            (worktreeId) => void runtime.wakePausedWorkspace(worktreeId)
+          )
+        : { moves: [], rolledBack: [] }
   )
   ipcMain.handle(
     'wslDriveUnc:listPendingRendererRewrites',

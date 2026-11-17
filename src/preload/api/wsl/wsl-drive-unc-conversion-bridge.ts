@@ -2,7 +2,7 @@ import { ipcRenderer } from 'electron'
 import type {
   WslDriveUncConversionRequest,
   WslDriveUncConversionResult,
-  WslMappedDriveMoveDue
+  WslMappedDriveRestartReport
 } from '../../../shared/wsl-move/wsl-drive-unc-conversion-types'
 import type { WslDriveUncPendingRendererRewrite } from '../../../shared/wsl-move/wsl-drive-unc-renderer-store-keys'
 import type { WslMoveRecordStoreRewrittenResult } from '../../../shared/wsl-move/wsl-move-renderer-rewrite-types'
@@ -11,8 +11,8 @@ import type { WslMoveRecordStoreRewrittenResult } from '../../../shared/wsl-move
 export type WslDriveUncConversionApi = {
   /** Checks, pauses the project's terminals and restarts the app to convert. */
   convert: (request: WslDriveUncConversionRequest) => Promise<WslDriveUncConversionResult>
-  /** Mapped-drive projects this startup respelled, once per run, for the window to move. */
-  takeMappedDriveMovesDue: () => Promise<WslMappedDriveMoveDue[]>
+  /** This startup's mapped-drive plans, once per run: moves to open, rollbacks to report. */
+  takeMappedDriveRestartReport: () => Promise<WslMappedDriveRestartReport>
   listPendingRendererRewrites: () => Promise<WslDriveUncPendingRendererRewrite[]>
   recordStoreRewritten: (request: {
     migrationId: string
@@ -22,7 +22,8 @@ export type WslDriveUncConversionApi = {
 
 export const wslDriveUncConversionApi: WslDriveUncConversionApi = {
   convert: (request) => ipcRenderer.invoke('wslDriveUnc:convert', request),
-  takeMappedDriveMovesDue: () => ipcRenderer.invoke('wslDriveUnc:takeMappedDriveMovesDue'),
+  takeMappedDriveRestartReport: () =>
+    ipcRenderer.invoke('wslDriveUnc:takeMappedDriveRestartReport'),
   listPendingRendererRewrites: () => ipcRenderer.invoke('wslDriveUnc:listPendingRendererRewrites'),
   recordStoreRewritten: (request) => ipcRenderer.invoke('wslDriveUnc:recordStoreRewritten', request)
 }

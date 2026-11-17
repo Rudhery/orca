@@ -30,12 +30,15 @@ import { orchestrationDbFile } from '../../runtime/orchestration/db/orchestratio
 import { journalDomainDatabasePath } from '../../native-chat/agent-session-journal/database/journal-domain-database'
 import { rewriteWslDriveUncState } from './wsl-drive-unc-state-rewrite'
 import { WSL_DRIVE_UNC_STATE_DISPOSITIONS } from '../../../shared/wsl-move/wsl-drive-unc-state-dispositions'
-import type { WslMappedDriveMoveDue } from '../../../shared/wsl-move/wsl-drive-unc-conversion-types'
+import type { WslMappedDriveRestartReport } from '../../../shared/wsl-move/wsl-drive-unc-conversion-types'
+import { readWslMappedDriveShareNow, type WslMappedDriveRead } from './wsl-mapped-drive-share'
 import {
-  readWslMappedDriveShareNow,
-  wslMappedDriveMatches,
-  type WslMappedDriveRead
-} from './wsl-mapped-drive-share'
+  assertMappedDriveStillMatches,
+  pausedOf,
+  profileStillNamesMappedDrive,
+  wslMappedDriveMovesDueOf,
+  wslMappedDriveRollbacksOf
+} from './wsl-mapped-drive-conversion-plan'
 
 const STARTUP_DRIVE_READ_TIMEOUT_MS = 10_000
 
@@ -51,9 +54,6 @@ export type WslDriveUncConversionStartupDeps = {
   readMappedDriveShare?: (letter: string) => Promise<WslMappedDriveRead>
 }
 
-/** The restart follows the confirm within seconds; a plan this old was left by another run. */
-const MAPPED_DRIVE_PLAN_MAX_AGE_MS = 60 * 60 * 1000
-
 export type WslDriveUncConversionOutcome =
   | {
       migrationId: string
@@ -67,7 +67,13 @@ export type WslDriveUncConversionOutcome =
       respelledThisRun?: boolean
     }
   /** The profile could not be rewritten; nothing changed, and the panes stay asleep. */
-  | { migrationId: string; outcome: 'rolled-back'; detail: string }
+  | {
+      migrationId: string
+      outcome: 'rolled-back'
+      detail: string
+      /** Set for a mapped-drive plan, which the window reports and whose panes it wakes. */
+      mappedDrive?: { letter: string; workspaceIds: string[] }
+    }
   /** The profile is converted; `store` failed and retries at the next startup. */
   | { migrationId: string; outcome: 'resuming'; store: string; detail: string }
 
@@ -91,11 +97,22 @@ async function runOne(
   const advancing = record.phase === 'prepared'
   if (advancing) {
     try {
-      await assertMappedDriveStillMatches(deps, record)
+      // Only a plan that hasn't touched the profile may be refused; one past its commit (a crash
+      // before the journal said so) finishes forward with the mapping it recorded.
+      if (record.mappedDrive && profileStillNamesMappedDrive(deps, record)) {
+        await assertMappedDriveStillMatches(deps, record)
+      }
       record = rewriteProfile(deps, record)
     } catch (error) {
       removeWslDriveUncConversion(deps.userDataPath, migrationId)
-      return { migrationId, outcome: 'rolled-back', detail: describe(error) }
+      return {
+        migrationId,
+        outcome: 'rolled-back',
+        detail: describe(error),
+        ...(record.mappedDrive
+          ? { mappedDrive: { letter: record.mappedDrive.letter, workspaceIds: pausedOf(record) } }
+          : {})
+      }
     }
     // Past the commit, so never a rollback: if this write fails the journal stays 'prepared', and
     // the next startup's rewrite is idempotent.
@@ -129,34 +146,6 @@ async function runOne(
     distro: record.distro,
     ...(record.mappedDrive ? { mappedDrive: true } : {}),
     ...(advancing ? { respelledThisRun: true } : {})
-  }
-}
-
-/**
- * A mapped-drive plan names the drive's share as it was at the confirm. One left over (an older
- * build ran in between, say) or a drive remapped since rolls back instead of rewriting into the
- * wrong distro or folder.
- */
-async function assertMappedDriveStillMatches(
-  deps: WslDriveUncConversionStartupDeps,
-  record: WslDriveUncConversion
-): Promise<void> {
-  const drive = record.mappedDrive
-  if (!drive) {
-    return
-  }
-  const age = (deps.now?.() ?? new Date()).getTime() - Date.parse(record.createdAt)
-  if (!(age >= 0 && age <= MAPPED_DRIVE_PLAN_MAX_AGE_MS)) {
-    throw new Error('wsl_mapped_drive_plan_expired')
-  }
-  const read = deps.readMappedDriveShare
-    ? await deps.readMappedDriveShare(drive.letter)
-    : 'unverifiable'
-  if (read === 'unverifiable') {
-    throw new Error('wsl_mapped_drive_unverifiable')
-  }
-  if (!wslMappedDriveMatches(read.share, record.distro, drive.share)) {
-    throw new Error('wsl_mapped_drive_remapped')
   }
 }
 
@@ -228,34 +217,25 @@ export function lastWslDriveUncConversionOutcomes(): WslDriveUncConversionOutcom
   return [...lastOutcomes]
 }
 
-let movesTaken = false
+let reportTaken = false
 
-/** Once per run: a window reload must not open the move again. */
-export function takeWslMappedDriveMovesDue(): WslMappedDriveMoveDue[] {
-  if (movesTaken) {
-    return []
+/**
+ * Once per run: a window reload must not open the move, or report a rollback, again. A rolled-back
+ * plan changed nothing, so the workspaces its confirm paused are woken as the window takes this.
+ */
+export function takeWslMappedDriveRestartReport(
+  wake: (worktreeId: string) => void,
+  outcomes: readonly WslDriveUncConversionOutcome[] = lastOutcomes
+): WslMappedDriveRestartReport {
+  if (reportTaken) {
+    return { moves: [], rolledBack: [] }
   }
-  movesTaken = true
-  return wslMappedDriveMovesDueOf(lastOutcomes)
-}
-
-export function wslMappedDriveMovesDueOf(
-  outcomes: readonly WslDriveUncConversionOutcome[]
-): WslMappedDriveMoveDue[] {
-  return outcomes.flatMap((outcome) =>
-    outcome.outcome === 'converted' &&
-    outcome.mappedDrive &&
-    outcome.respelledThisRun &&
-    outcome.distro
-      ? [
-          {
-            distro: outcome.distro,
-            repoIds: outcome.repoIds,
-            folderWorkspaceIds: outcome.folderWorkspaceIds
-          }
-        ]
-      : []
-  )
+  reportTaken = true
+  const rolledBack = wslMappedDriveRollbacksOf(outcomes)
+  for (const worktreeId of rolledBack.flatMap((rollback) => rollback.workspaceIds)) {
+    wake(worktreeId)
+  }
+  return { moves: wslMappedDriveMovesDueOf(outcomes), rolledBack }
 }
 
 /**

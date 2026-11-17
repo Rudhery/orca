@@ -13,10 +13,13 @@ import type { FolderWorkspace } from '../../../shared/folder-workspaces/folder-w
 import type { ProjectGroup } from '../../../shared/project/groups/project-group-types'
 import type { Repo } from '../../../shared/repository/repo-types'
 import {
+  isWslUncPath,
   parseWslUncPath,
   wslHostMovableDistroOfPath,
   wslUncPathToLinux
 } from '../../../shared/file-access/wsl-paths'
+import type { Project } from '../../../shared/project/project-types'
+import { getRepoIdFromWorktreeId, splitWorktreeIdForFilesystem } from '../../../shared/worktree/id'
 import {
   wslMappedDrivePathToShare,
   type WslMappedDrive
@@ -32,6 +35,9 @@ type WslMappedDriveScopeState = {
   repos: readonly Repo[]
   folderWorkspaces: readonly FolderWorkspace[]
   projectGroups: readonly ProjectGroup[]
+  projects?: readonly Pick<Project, 'sourceRepoIds' | 'localWindowsRuntimePreference'>[]
+  /** Saved worktree rows, keyed by worktree id, which names each worktree's folder. */
+  worktreeMeta?: Readonly<Record<string, unknown>>
 }
 
 export function collectWslMappedDriveScope(
@@ -70,7 +76,11 @@ export function collectWslMappedDriveScope(
       getRepoExecutionHostId(repo) !== LOCAL_EXECUTION_HOST_ID
         ? 'not-local'
         : (refusalOf(wslMoveRepoPaths(repo)) ??
-          (claimedRepoPaths.has(key) ? 'duplicate-windows-project' : null))
+          (claimedRepoPaths.has(key)
+            ? 'duplicate-windows-project'
+            : runtimeWouldChange(state, repo.id)
+              ? 'runtime-would-change'
+              : null))
     if (reason) {
       scope.refused.push({ kind: 'repo', id: repo.id, reason })
     } else {
@@ -95,10 +105,11 @@ export function collectWslMappedDriveScope(
       continue
     }
     const key = normalizeRuntimePathForComparison(target)
+    // A folder has no runtime setting: its share path alone would switch its terminals to WSL.
     const reason = !isLocal(workspace)
       ? 'not-local'
       : (refusalOf([workspace.folderPath]) ??
-        (claimedFolderPaths.has(key) ? 'duplicate-windows-project' : null))
+        (claimedFolderPaths.has(key) ? 'duplicate-windows-project' : 'runtime-would-change'))
     if (reason) {
       scope.refused.push({ kind: 'folder-workspace', id: workspace.id, reason })
     } else {
@@ -107,4 +118,25 @@ export function collectWslMappedDriveScope(
     }
   }
   return scope
+}
+
+/**
+ * A project with no saved runtime runs each workspace by its own path: a drive path on the global
+ * default, a share path in the distro. The respelling pins the global default, which would move a
+ * workspace already on the share out of the distro, so a project with one is refused instead.
+ */
+function runtimeWouldChange(state: WslMappedDriveScopeState, repoId: string): boolean {
+  const project = state.projects?.find((entry) => entry.sourceRepoIds.includes(repoId))
+  if (project?.localWindowsRuntimePreference !== undefined) {
+    return false
+  }
+  const repoIds = new Set(project?.sourceRepoIds ?? [repoId])
+  const paths = [
+    ...state.repos.filter((repo) => repoIds.has(repo.id)).flatMap(wslMoveRepoPaths),
+    ...Object.keys(state.worktreeMeta ?? {}).flatMap((worktreeId) => {
+      const split = splitWorktreeIdForFilesystem(worktreeId)
+      return split && repoIds.has(getRepoIdFromWorktreeId(worktreeId)) ? [split.worktreePath] : []
+    })
+  ]
+  return paths.some(isWslUncPath)
 }

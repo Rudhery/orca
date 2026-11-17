@@ -33,6 +33,7 @@ export type WslDriveUncConversionBlocker =
         | 'overlaps-refused-project'
         | 'not-windows-drive-mount'
         | 'windows-drive-folder'
+        | 'runtime-would-change'
     }
   /** The mapped drive no longer points where the window showed (`mappedDriveShare`). */
   | { kind: 'drive-not-mapped' }
@@ -56,6 +57,20 @@ export type WslMappedDriveMoveDue = {
   distro: string
   repoIds: string[]
   folderWorkspaceIds: string[]
+}
+
+/** A mapped-drive plan the restart rolled back: nothing changed, and its panes were asleep. */
+export type WslMappedDriveRollback = {
+  reason: 'remapped' | 'unverifiable' | 'expired' | 'failed'
+  letter: string
+  /** The workspaces whose terminals the confirm put to sleep. */
+  workspaceIds: string[]
+}
+
+/** What this startup did with mapped-drive plans, handed to the window once. */
+export type WslMappedDriveRestartReport = {
+  moves: WslMappedDriveMoveDue[]
+  rolledBack: WslMappedDriveRollback[]
 }
 
 export type WslDriveUncConversionResult =

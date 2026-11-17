@@ -100,6 +100,11 @@ export abstract class RuntimeWorkspaceSleepOperations extends OrcaRuntimeWithRes
     return this.workspaceSleep.sleepOwnWorktree(worktree.id, opts)
   }
 
+  /** A workspace paused for a change that was then called off: woken as a phone's open wakes it. */
+  wakePausedWorkspace(worktreeId: string): Promise<void> {
+    return this.queueSleepingAgentWake(worktreeId)
+  }
+
   /** A phone's wake, queued: it waits out a sleep still running, and a delete cancels it. Never rejects. */
   protected queueSleepingAgentWake(worktreeId: string): Promise<void> {
     return this.workspaceSleep

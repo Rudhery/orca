@@ -7,6 +7,7 @@ import { normalizeRuntimePathForComparison } from '../file-access/cross-platform
 import { LOCAL_EXECUTION_HOST_ID } from '../execution-host/execution-host'
 import type { PythonEnvironment } from '../editor/notebooks/notebook-kernel-types'
 import { wslDriveUncRespelling, type WslMappedDrive } from './wsl-drive-unc-respelling'
+import { splitWorktreeIdForFilesystem } from '../worktree/id'
 
 /** A converted conversion's renderer half, as main lists it. */
 export type WslDriveUncPendingRendererRewrite = {
@@ -36,7 +37,11 @@ export function wslDriveUncRendererKeys(
   >
 ): WslDriveUncRendererKeys {
   const ids = new Map(conversion.worktreeIds)
-  const respelling = wslDriveUncRespelling(conversion, conversion.rootPaths)
+  // Each converted worktree's own folder too: its exact case restores a folded quick-open root.
+  const worktreeRoots = conversion.worktreeIds.flatMap(
+    ([oldId]) => splitWorktreeIdForFilesystem(oldId)?.worktreePath ?? []
+  )
+  const respelling = wslDriveUncRespelling(conversion, [...conversion.rootPaths, ...worktreeRoots])
   const roots = conversion.rootPaths.flatMap((root) => {
     const converted = respelling.path(root)
     return converted ? [normalizeRuntimePathForComparison(converted)] : []

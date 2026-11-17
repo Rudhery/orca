@@ -143,6 +143,12 @@ function blockerMessage(blocker: WslDriveUncConversionBlocker, drivePath: string
             'wslDriveUnc.blocker.overlap',
             'This project shares folders with a project Orca can’t convert, so they would split.'
           )
+        case 'runtime-would-change':
+          return translate(
+            'wslDriveUnc.blocker.runtimeWouldChange',
+            'Reopening this at {{drivePath}} would change where its terminals and Git run, so nothing changed. Choose its Project runtime first, or add the folder again at {{drivePath}}.',
+            { drivePath }
+          )
         case 'windows-drive-folder':
           return translate(
             'wslDriveUnc.blocker.windowsDriveFolder',

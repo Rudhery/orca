@@ -83,6 +83,35 @@ describe('wslDriveUncRendererKeys for a mapped drive', () => {
     expect(keys.path(String.raw`W:\home\me\other`)).toBeNull()
   })
 
+  it('keeps a linked worktree’s own case below a broader worktree base', () => {
+    const oldId = String.raw`r::W:\home\me\trees\Feature`
+    const newId = String.raw`r::\\wsl.localhost\Ubuntu\home\me\trees\Feature`
+    const keys = wslDriveUncRendererKeys({
+      distro: 'Ubuntu',
+      mappedDrive: DRIVE,
+      worktreeIds: [[oldId, newId]],
+      // The base is listed before the worktree, so only innermost-first matching finds it.
+      rootPaths: [String.raw`W:\home\me\App`, String.raw`W:\home\me\trees`]
+    })
+    const route = { executionHostId: 'local' }
+    expect(
+      convertedQuickOpenHistoryScope(
+        JSON.stringify([route, oldId, 'w:/home/me/trees/feature']),
+        keys
+      )
+    ).toBe(JSON.stringify([route, newId, '//wsl/ubuntu/home/me/trees/Feature']))
+  })
+
+  it('treats only an exactly folded string as a comparison key', () => {
+    const respelling = wslDriveUncRespelling({ distro: 'Ubuntu', mappedDrive: DRIVE }, [
+      String.raw`W:\home\me\App`
+    ])
+    expect(respelling.comparisonForm('w:/home/me/app')).toBe('//wsl/ubuntu/home/me/App')
+    expect(respelling.comparisonForm('w:/home/me/app/')).toBeNull()
+    expect(respelling.comparisonForm('w:/home//me/app')).toBeNull()
+    expect(respelling.comparisonForm(String.raw`w:\home\me\app`)).toBeNull()
+  })
+
   it("keeps the root's case for a mixed-case folder, whose key is folded", () => {
     const oldId = String.raw`r::W:\home\me\App`
     const newId = String.raw`r::\\wsl.localhost\Ubuntu\home\me\App`

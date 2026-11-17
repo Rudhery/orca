@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import '../../sqlite/sync-database'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDefaultPersistedState } from '../../../shared/orca-profiles/constants'
 import type { PersistedState } from '../../../shared/orca-profiles/persisted-state-types'
 import { readProfileProjectTransferState } from '../../orca-profiles/project-transfer/profile-project-domain-state'
@@ -18,8 +18,14 @@ import {
 } from './wsl-drive-unc-conversion-journal'
 import {
   runWslDriveUncConversionsAtStartup,
-  wslMappedDriveMovesDueOf
+  takeWslMappedDriveRestartReport
 } from './wsl-drive-unc-conversion-startup'
+import {
+  wslMappedDriveMovesDueOf,
+  wslMappedDriveRollbacksOf
+} from './wsl-mapped-drive-conversion-plan'
+import type { WslDriveUncConversionStore } from './wsl-drive-unc-conversion-stores'
+import { rewriteWslDriveUncState } from './wsl-drive-unc-state-rewrite'
 import type { WslMappedDriveRead } from './wsl-mapped-drive-share'
 
 const PROFILE = 'profile-1'
@@ -151,12 +157,15 @@ function journal(overrides: Partial<WslDriveUncConversion> = {}): void {
   })
 }
 
-function run(read: WslMappedDriveRead = { share: SHARE }) {
+function run(
+  read: WslMappedDriveRead = { share: SHARE },
+  stores: WslDriveUncConversionStore[] = []
+) {
   return runWslDriveUncConversionsAtStartup({
     userDataPath: root,
     profileUserDataPath: root,
     profileId: PROFILE,
-    stores: [],
+    stores,
     now: () => new Date('2026-11-16T00:00:05.000Z'),
     readMappedDriveShare: async () => read
   })
@@ -222,11 +231,53 @@ describe('a mapped-drive conversion at startup', () => {
   ])('rolls back, changing nothing, when %s', async (_why, read, overrides) => {
     seedProfile(profileState())
     journal(overrides)
-    const [outcome] = await run(read)
-    expect(outcome).toMatchObject({ migrationId: 'conv-1', outcome: 'rolled-back' })
+    const outcomes = await run(read)
+    expect(outcomes[0]).toMatchObject({ migrationId: 'conv-1', outcome: 'rolled-back' })
     expect(readProfileProjectTransferState(PROFILE, root).state.repos[0].path).toBe(MAPPED)
     expect(listWslDriveUncConversions(root)).toEqual([])
+    // The window says why, and main wakes what the confirm paused.
+    expect(wslMappedDriveRollbacksOf(outcomes)).toEqual([
+      {
+        reason: expect.stringMatching(/^(remapped|unverifiable|expired)$/),
+        letter: 'W',
+        workspaceIds: [OLD_ID, 'folder:notes']
+      }
+    ])
   })
+
+  it.each([
+    ['the drive now maps elsewhere', { share: String.raw`\\wsl.localhost\Debian` }, {}],
+    ['Windows cannot say where it maps', 'unverifiable' as const, {}],
+    [
+      'the plan is left over from long ago',
+      { share: SHARE },
+      { createdAt: '2026-11-01T00:00:00.000Z' }
+    ]
+  ])(
+    'finishes forward when the profile already committed and %s',
+    async (_why, read, overrides) => {
+      // A crash between the profile commit and the journal's phase write left it `prepared`.
+      const committed = rewriteWslDriveUncState(profileState(), {
+        distro: 'Ubuntu',
+        mappedDrive: { letter: 'W', share: SHARE },
+        repoIds: ['repo-a'],
+        folderWorkspaceIds: ['notes']
+      }).state
+      seedProfile(committed)
+      journal(overrides)
+      const store = { id: 'terminal-history', run: vi.fn() }
+      const [outcome] = await run(read, [store])
+      expect(outcome).toMatchObject({ outcome: 'converted', respelledThisRun: true })
+      expect(store.run).toHaveBeenCalledWith(new Map([[OLD_ID, NEW_ID]]))
+      expect(readProfileProjectTransferState(PROFILE, root).state.repos[0].path).toBe(UNC)
+      expect(listWslDriveUncConversions(root)).toEqual([
+        expect.objectContaining({
+          phase: 'profile-rewritten',
+          rewrittenStores: ['terminal-history']
+        })
+      ])
+    }
+  )
 
   it('keeps its journal apart from D1c so an older build never runs it as one', () => {
     journal()
@@ -248,6 +299,25 @@ describe('a mapped-drive conversion at startup', () => {
         roots: ['//wsl.localhost/ubuntu/home/me/App', '//wsl.localhost/ubuntu/home/me/notes']
       }
     ])
+  })
+
+  it('wakes the paused workspaces of a rolled-back plan once, as the window takes the report', () => {
+    const wake = vi.fn()
+    const outcomes = [
+      {
+        migrationId: 'conv-1',
+        outcome: 'rolled-back' as const,
+        detail: 'wsl_mapped_drive_remapped',
+        mappedDrive: { letter: 'W', workspaceIds: [OLD_ID] }
+      }
+    ]
+    expect(takeWslMappedDriveRestartReport(wake, outcomes)).toEqual({
+      moves: [],
+      rolledBack: [{ reason: 'remapped', letter: 'W', workspaceIds: [OLD_ID] }]
+    })
+    expect(wake).toHaveBeenCalledWith(OLD_ID)
+    expect(takeWslMappedDriveRestartReport(wake, outcomes)).toEqual({ moves: [], rolledBack: [] })
+    expect(wake).toHaveBeenCalledOnce()
   })
 
   it('reports no move due for a D1c conversion', () => {

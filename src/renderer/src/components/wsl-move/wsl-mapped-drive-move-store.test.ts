@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const toast = vi.hoisted(() => vi.fn())
+const toast = vi.hoisted(() => Object.assign(vi.fn(), { error: vi.fn() }))
 const openWslMoveDialog = vi.hoisted(() => vi.fn(async () => {}))
 vi.mock('sonner', () => ({ toast }))
 vi.mock('./wsl-move-dialog-store', () => ({ openWslMoveDialog }))
@@ -22,15 +22,16 @@ const host = {
 }
 
 const convert = vi.fn()
-const takeMappedDriveMovesDue = vi.fn()
+const takeMappedDriveRestartReport = vi.fn()
 
 beforeEach(() => {
-  vi.stubGlobal('window', { api: { wslDriveUnc: { convert, takeMappedDriveMovesDue } } })
+  vi.stubGlobal('window', { api: { wslDriveUnc: { convert, takeMappedDriveRestartReport } } })
 })
 
 afterEach(() => {
   convert.mockReset()
-  takeMappedDriveMovesDue.mockReset()
+  takeMappedDriveRestartReport.mockReset()
+  toast.error.mockReset()
   openWslMoveDialog.mockClear()
   toast.mockReset()
   vi.unstubAllGlobals()
@@ -98,10 +99,23 @@ describe('the mapped-drive move', () => {
     })
   })
 
+  it('tells the user a restart that changed nothing, and opens no move', async () => {
+    takeMappedDriveRestartReport.mockResolvedValue({
+      moves: [],
+      rolledBack: [{ reason: 'remapped', letter: 'W', workspaceIds: ['repo-w::W:\\x'] }]
+    })
+    await openWslMappedDriveMovesDue()
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('now points somewhere else'))
+    expect(openWslMoveDialog).not.toHaveBeenCalled()
+  })
+
   it('opens the move with every reopened project checked once the restart is done', async () => {
-    takeMappedDriveMovesDue.mockResolvedValue([
-      { distro: 'Ubuntu', repoIds: ['repo-w', 'repo-nested'], folderWorkspaceIds: ['notes'] }
-    ])
+    takeMappedDriveRestartReport.mockResolvedValue({
+      moves: [
+        { distro: 'Ubuntu', repoIds: ['repo-w', 'repo-nested'], folderWorkspaceIds: ['notes'] }
+      ],
+      rolledBack: []
+    })
     await openWslMappedDriveMovesDue()
     expect(openWslMoveDialog).toHaveBeenCalledWith(
       expect.objectContaining({

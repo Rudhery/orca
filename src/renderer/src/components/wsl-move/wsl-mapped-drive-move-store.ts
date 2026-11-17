@@ -8,7 +8,8 @@ import { toast } from 'sonner'
 import { translate } from '@/i18n/i18n'
 import type {
   WslDriveUncConversionResult,
-  WslMappedDriveMoveDue
+  WslMappedDriveRestartReport,
+  WslMappedDriveRollback
 } from '../../../../shared/wsl-move/wsl-drive-unc-conversion-types'
 import type { WslMoveRowRef } from '../../../../shared/wsl-move/wsl-move-driver-types'
 import { wslDriveUncConversionMessages } from '../wsl-drive-project/wsl-drive-unc-conversion-copy'
@@ -113,16 +114,22 @@ export async function confirmWslMappedDriveMove(): Promise<void> {
   })
 }
 
-/** After the restart that reopened them: the move, with only those projects checked. */
+/**
+ * After the restart: the move for the projects it reopened, with only those checked; or, for a
+ * plan it rolled back, why. Main wakes the terminals that plan paused as it hands this over.
+ */
 export async function openWslMappedDriveMovesDue(): Promise<void> {
-  let due: WslMappedDriveMoveDue[]
+  let report: WslMappedDriveRestartReport
   try {
-    due = await window.api.wslDriveUnc.takeMappedDriveMovesDue()
+    report = await window.api.wslDriveUnc.takeMappedDriveRestartReport()
   } catch {
     return
   }
+  for (const rollback of report.rolledBack) {
+    toast.error(rollbackMessage(rollback))
+  }
   // One dialog at a time; a second distro's projects are listed on its host row.
-  const first = due[0]
+  const first = report.moves[0]
   if (!first) {
     return
   }
@@ -131,4 +138,34 @@ export async function openWslMappedDriveMovesDue(): Promise<void> {
     ...first.folderWorkspaceIds.map((id) => ({ kind: 'folder' as const, id }))
   ]
   openWslMoveDialogFor(first.distro, refs)
+}
+
+function rollbackMessage(rollback: WslMappedDriveRollback): string {
+  const { letter } = rollback
+  switch (rollback.reason) {
+    case 'remapped':
+      return translate(
+        'wslMove.mappedDrive.rolledBack.remapped',
+        'Orca didn’t reopen your project: drive {{letter}}: now points somewhere else. Nothing changed.',
+        { letter }
+      )
+    case 'unverifiable':
+      return translate(
+        'wslMove.mappedDrive.rolledBack.unverifiable',
+        'Orca didn’t reopen your project: it couldn’t check drive {{letter}}: in time. Nothing changed; try the move again.',
+        { letter }
+      )
+    case 'expired':
+      return translate(
+        'wslMove.mappedDrive.rolledBack.expired',
+        'Orca didn’t reopen your project from drive {{letter}}: the request was too old. Nothing changed; try the move again.',
+        { letter }
+      )
+    case 'failed':
+      return translate(
+        'wslMove.mappedDrive.rolledBack.failed',
+        'Orca couldn’t reopen your project from drive {{letter}}:. Nothing changed; try the move again.',
+        { letter }
+      )
+  }
 }

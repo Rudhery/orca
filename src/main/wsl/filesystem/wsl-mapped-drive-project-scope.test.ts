@@ -29,7 +29,7 @@ function folder(id: string, folderPath: string, extra: Partial<FolderWorkspace> 
 }
 
 describe('collectWslMappedDriveScope', () => {
-  it('takes local repos and folders on the drive, and nothing elsewhere', () => {
+  it('takes local repos on the drive, and nothing elsewhere', () => {
     const scope = collectWslMappedDriveScope(
       {
         repos: [
@@ -42,7 +42,12 @@ describe('collectWslMappedDriveScope', () => {
       },
       DRIVE
     )
-    expect(scope).toEqual({ repoIds: ['on-drive'], folderWorkspaceIds: ['notes'], refused: [] })
+    expect(scope).toEqual({
+      repoIds: ['on-drive'],
+      folderWorkspaceIds: [],
+      // A folder has no runtime setting, so its share path alone would switch it to WSL.
+      refused: [{ kind: 'folder-workspace', id: 'notes', reason: 'runtime-would-change' }]
+    })
   })
 
   it('accepts a worktree folder already saved under the share path', () => {
@@ -54,7 +59,11 @@ describe('collectWslMappedDriveScope', () => {
           })
         ],
         folderWorkspaces: [],
-        projectGroups: []
+        projectGroups: [],
+        // Saved, so the worktrees on the share keep running where they did.
+        projects: [
+          { sourceRepoIds: ['app'], localWindowsRuntimePreference: { kind: 'windows-host' } }
+        ]
       },
       DRIVE
     )
@@ -82,6 +91,41 @@ describe('collectWslMappedDriveScope', () => {
       { kind: 'repo', id: 'remote', reason: 'not-local' },
       { kind: 'repo', id: 'drvfs', reason: 'windows-drive-folder' },
       { kind: 'repo', id: 'twin', reason: 'duplicate-windows-project' }
+    ])
+  })
+
+  it('refuses a project whose single runtime could not keep every workspace where it ran', () => {
+    const project = (id: string, preference?: { kind: 'wsl'; distro: string }) => ({
+      sourceRepoIds: [id],
+      localWindowsRuntimePreference: preference
+    })
+    const scope = collectWslMappedDriveScope(
+      {
+        repos: [
+          repo('base-on-share', String.raw`W:\home\me\a`, {
+            worktreeBasePath: String.raw`\\wsl.localhost\Ubuntu\home\me\trees`
+          }),
+          repo('linked-on-share', String.raw`W:\home\me\b`),
+          repo('saved-choice', String.raw`W:\home\me\c`, {
+            worktreeBasePath: String.raw`\\wsl.localhost\Ubuntu\home\me\trees`
+          })
+        ],
+        folderWorkspaces: [],
+        projectGroups: [],
+        projects: [
+          project('base-on-share'),
+          project('linked-on-share'),
+          project('saved-choice', { kind: 'wsl', distro: 'Ubuntu' })
+        ],
+        worktreeMeta: { [String.raw`linked-on-share::\\wsl.localhost\Ubuntu\home\me\Feature`]: {} }
+      },
+      DRIVE
+    )
+    // A saved choice already decides every workspace, so it carries over unchanged.
+    expect(scope.repoIds).toEqual(['saved-choice'])
+    expect(scope.refused).toEqual([
+      { kind: 'repo', id: 'base-on-share', reason: 'runtime-would-change' },
+      { kind: 'repo', id: 'linked-on-share', reason: 'runtime-would-change' }
     ])
   })
 

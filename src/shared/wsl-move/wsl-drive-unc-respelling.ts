@@ -35,10 +35,13 @@ export function wslDriveUncRespelling(
   const map = conversion.mappedDrive
     ? mappedDriveRespelling(conversion.mappedDrive)
     : uncDriveRespelling(conversion.distro)
-  const rootKeys = roots.flatMap((root) => {
-    const converted = map.path(root)
-    return converted ? [{ from: normalizeRuntimePathForComparison(root), to: converted }] : []
-  })
+  const rootKeys = roots
+    .flatMap((root) => {
+      const converted = map.path(root)
+      return converted ? [{ from: normalizeRuntimePathForComparison(root), to: converted }] : []
+    })
+    // Innermost first: a worktree's own root keeps its case, which its broader base can't restore.
+    .sort((a, b) => b.from.length - a.from.length)
   return {
     path: map.path,
     fileUrl: map.fileUrl,
@@ -127,9 +130,12 @@ function mappedDriveRespelling(drive: WslMappedDrive): PathMap {
       // The share's own segments encoded; the tail keeps the URL's encoding.
       return path ? { url: `${shareUrl}${match[2] ?? '/'}${match[3] ?? ''}`, path } : null
     },
-    // Folded: lowercase, forward slashes only. Saved paths keep their `W:\` spelling.
+    // Exactly what folding produces (lowercase, single forward slashes, no trailing one); saved
+    // paths keep their `W:\` spelling. Only a key at or inside a converted root is re-keyed.
     isComparisonKey: (value) =>
-      value.startsWith(`${letter}:/`) && value === value.toLowerCase() && !value.includes('\\')
+      value.startsWith(`${letter}:/`) &&
+      value === value.toLowerCase() &&
+      value === normalizeRuntimePathForComparison(value)
   }
 }
 

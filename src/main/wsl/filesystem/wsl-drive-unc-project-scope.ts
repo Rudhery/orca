@@ -32,6 +32,8 @@ export type WslDriveUncRefusal =
   | 'overlaps-refused-project'
   /** A mapped drive's folder that is a Windows drive seen through the distro (`W:\mnt\c`). */
   | 'windows-drive-folder'
+  /** Respelling a mapped drive's project would change where its terminals and Git run. */
+  | 'runtime-would-change'
 
 export type WslDriveUncScope = {
   repoIds: string[]
