@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  classifyWslMappedDrive,
   clearWslMappedDriveShareCacheForTests,
   readWslMappedDriveShareNow,
+  wslMappedDriveLastKnownShare,
   resolveWslMappedDrivePath,
   type WslMappedDriveShareDeps
 } from './wsl-mapped-drive-share'
@@ -162,7 +164,7 @@ describe('readWslMappedDriveShareNow', () => {
   it('tells a slow drive apart from one that maps nowhere', async () => {
     await expect(
       readWslMappedDriveShareNow(
-        'W',
+        'Q',
         deps(() => new Promise<string>(() => {}))
       )
     ).resolves.toBe('unverifiable')
@@ -182,5 +184,45 @@ describe('readWslMappedDriveShareNow', () => {
     ).resolves.toEqual({
       share: null
     })
+  })
+})
+
+describe('fresh reads and last-known answers', () => {
+  it('shares one lookup between concurrent reads, so a hung share pins one thread', async () => {
+    const realpathRoot = vi.fn(() => new Promise<string>(() => {}))
+    const reads = await Promise.all(
+      [1, 2, 3].map(() => readWslMappedDriveShareNow('Z', deps(realpathRoot)))
+    )
+    expect(reads).toEqual(['unverifiable', 'unverifiable', 'unverifiable'])
+    // A later read waits out the hung lookup instead of stacking another.
+    await expect(readWslMappedDriveShareNow('Z', deps(realpathRoot))).resolves.toBe('unverifiable')
+    expect(realpathRoot).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks again once an older lookup settles, so each read is fresh', async () => {
+    let answer!: (real: string) => void
+    const realpathRoot = vi
+      .fn<WslMappedDriveShareDeps['realpathRoot']>()
+      .mockImplementationOnce(() => new Promise((done) => (answer = done)))
+      .mockResolvedValueOnce('\\\\wsl.localhost\\Debian\\')
+    const first = readWslMappedDriveShareNow('W', deps(realpathRoot, { timeoutMs: 500 }))
+    const second = readWslMappedDriveShareNow('W', deps(realpathRoot, { timeoutMs: 500 }))
+    answer('\\\\wsl.localhost\\Ubuntu\\')
+    await expect(first).resolves.toEqual({ share: '\\\\wsl.localhost\\Ubuntu' })
+    await expect(second).resolves.toEqual({ share: '\\\\wsl.localhost\\Debian' })
+    expect(realpathRoot).toHaveBeenCalledTimes(2)
+  })
+
+  it('remembers each answer, and classifies an unknown letter with one cached lookup', async () => {
+    expect(wslMappedDriveLastKnownShare('C')).toBeNull()
+    const realpathRoot = vi.fn(async () => 'C:\\')
+    await expect(classifyWslMappedDrive('C', deps(realpathRoot))).resolves.toEqual({ share: null })
+    await expect(classifyWslMappedDrive('c', deps(realpathRoot))).resolves.toEqual({ share: null })
+    expect(realpathRoot).toHaveBeenCalledTimes(1)
+    await readWslMappedDriveShareNow(
+      'W',
+      deps(async () => '\\\\wsl.localhost\\Ubuntu\\')
+    )
+    expect(wslMappedDriveLastKnownShare('w')).toEqual({ share: '\\\\wsl.localhost\\Ubuntu' })
   })
 })

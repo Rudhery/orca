@@ -49,7 +49,7 @@ describe('collectWslMoveScope with mapped drives', () => {
   }
 
   it('takes local W: projects with the mapping and ignores them without it', () => {
-    expect(collectWslMoveScope(state, 'Ubuntu', [W])).toEqual({
+    expect(collectWslMoveScope(state, 'Ubuntu', { mappedDrives: [W] })).toEqual({
       repoIds: ['app'],
       folderWorkspaceIds: ['notes'],
       refused: [{ kind: 'repo', id: 'drvfs', reason: 'windows-drive' }]
@@ -61,11 +61,23 @@ describe('collectWslMoveScope with mapped drives', () => {
     })
   })
 
-  it('refuses a mapped-drive repo with worktrees Git for Windows created', () => {
-    expect(collectWslMoveScope(state, 'Ubuntu', [W], new Set(['app'])).refused).toContainEqual({
-      kind: 'repo',
-      id: 'app',
-      reason: 'windows-git-worktrees'
+  it('refuses a mapped-drive repo the host Git cannot take, with its reason', () => {
+    const scope = collectWslMoveScope(state, 'Ubuntu', {
+      mappedDrives: [W],
+      windowsGitRefusals: new Map([['app', 'windows-git-dir' as const]])
+    })
+    expect(scope.refused).toContainEqual({ kind: 'repo', id: 'app', reason: 'windows-git-dir' })
+  })
+
+  it('lists local projects of a drive that did not answer instead of dropping them', () => {
+    expect(collectWslMoveScope(state, 'Ubuntu', { unverifiableLetters: ['W'] })).toEqual({
+      repoIds: [],
+      folderWorkspaceIds: [],
+      refused: [
+        { kind: 'repo', id: 'app', reason: 'mapped-drive-unverifiable' },
+        { kind: 'repo', id: 'drvfs', reason: 'mapped-drive-unverifiable' },
+        { kind: 'folder-workspace', id: 'notes', reason: 'mapped-drive-unverifiable' }
+      ]
     })
   })
 })

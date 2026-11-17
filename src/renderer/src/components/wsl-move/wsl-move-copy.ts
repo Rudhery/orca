@@ -82,6 +82,13 @@ export function wslMoveRefusalMessage(
             { distro }
           )
     case 'wsl_move_nothing_new':
+      if (refusal.refused?.length) {
+        return t(
+          'wslMove.refusal.nothingMovable',
+          'None of these projects can move to the {{distro}} host yet. Each one says why.',
+          { distro }
+        )
+      }
       return t('wslMove.refusal.nothingNew', 'These projects are already on the {{distro}} host.', {
         distro
       })

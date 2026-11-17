@@ -35,7 +35,10 @@ vi.mock('../../../telemetry/cohort-classifier', () => ({
 const W = { letter: 'W', share: '\\\\wsl.localhost\\Ubuntu' }
 
 let rig: WslMoveRig
+// What Windows answers now, and the answer each letter last gave (null: never answered).
 let shares: Record<string, WslMappedDriveRead>
+let known: Record<string, string | null>
+let reads: string[]
 
 beforeEach(() => {
   vi.stubEnv(WSL_HOSTS_INTERNAL_GATE_ENV, '1')
@@ -43,7 +46,15 @@ beforeEach(() => {
   rig = createWslMoveKillRig()
   rig.world.repos = [{ ...rig.world.repos[0], path: 'W:\\home\\dev\\app' }]
   shares = { W: { share: W.share } }
-  rig.world.deps.readMappedDriveShare = async (letter) => shares[letter] ?? { share: null }
+  known = { W: W.share }
+  reads = []
+  rig.world.deps.driveShares = {
+    classify: async (letter) => (letter in known ? { share: known[letter] } : null),
+    readNow: async (letter) => {
+      reads.push(letter)
+      return shares[letter] ?? { share: null }
+    }
+  }
 })
 
 afterEach(() => {
@@ -96,18 +107,28 @@ describe('moving a project saved under a mapped drive', () => {
     expect(listWslMoveCutovers(rig.userDataPath)).toEqual([])
   })
 
-  it('leaves out only the projects of a drive that does not answer', async () => {
+  it('lists the projects of a drive that does not answer as not moving, and moves the rest', async () => {
     // An offline share elsewhere must not block moving the distro's other projects.
     rig.world.repos = [
       rig.world.repos[0],
       { ...rig.world.repos[0], id: 'repo-s', path: 'S:\\shared\\tool' }
     ]
-    shares = { W: { share: W.share }, S: 'unverifiable' }
     expect(await previewWslMove(rig.world.deps, { distro: 'Ubuntu' })).toMatchObject({
       outcome: 'ready',
       repoIds: ['repo-1'],
-      mappedDrives: [W]
+      mappedDrives: [W],
+      refused: [{ kind: 'repo', id: 'repo-s', reason: 'mapped-drive-unverifiable' }]
     })
+  })
+
+  it('never reads a drive last known to point outside WSL', async () => {
+    rig.world.repos = [
+      rig.world.repos[0],
+      { ...rig.world.repos[0], id: 'repo-c', path: 'C:\\src\\site' }
+    ]
+    known.C = null
+    await previewWslMove(rig.world.deps, { distro: 'Ubuntu' })
+    expect(reads).toEqual(['W'])
   })
 
   it('refuses a start that can no longer read a drive the preview showed', async () => {
@@ -123,11 +144,33 @@ describe('moving a project saved under a mapped drive', () => {
     expect(listWslMoveCutovers(rig.userDataPath)).toEqual([])
   })
 
-  it('lists a repo with Windows-authored worktrees as not moving', async () => {
-    rig.world.deps.windowsGitWorktrees = async () => ['W:/home/dev/app-trees/x']
+  it('carries why when the only candidate is a repo the host Git cannot take', async () => {
+    rig.world.deps.windowsGitVerdict = async () => 'windows-git-worktrees'
     expect(await previewWslMove(rig.world.deps, { distro: 'Ubuntu' })).toMatchObject({
       outcome: 'refused',
-      code: 'wsl_move_nothing_new'
+      code: 'wsl_move_nothing_new',
+      refused: [{ kind: 'repo', id: 'repo-1', reason: 'windows-git-worktrees' }]
     })
+  })
+})
+
+describe('moving UNC projects beside a mapped-drive project', () => {
+  beforeEach(() => {
+    const unc = { ...rig.world.repos[0], path: '\\\\wsl.localhost\\Ubuntu\\home\\dev\\app' }
+    rig.world.repos = [unc, { ...unc, id: 'repo-w', path: 'W:\\home\\dev\\other' }]
+  })
+
+  it('journals no mapping, as version 1, when the moved rows name no mapped drive', async () => {
+    const request = { distro: 'Ubuntu', repoIds: ['repo-1'], folderWorkspaceIds: [] }
+    const preview = await previewWslMove(rig.world.deps, request)
+    expect(preview).toMatchObject({ outcome: 'ready', repoIds: ['repo-1'], mappedDrives: [] })
+    // The unselected W: drive answering differently by now doesn't refuse this start.
+    shares = { W: { share: '\\\\wsl.localhost\\Ubuntu\\home' } }
+    expect(
+      await moveProjectsToWslHost(rig.world.deps, { ...request, mappedDrives: [] })
+    ).toMatchObject({ outcome: 'moved' })
+    const [record] = listWslMoveCutovers(rig.userDataPath)
+    expect(record.version).toBe(1)
+    expect(record.mappedDrives).toBeUndefined()
   })
 })

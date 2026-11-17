@@ -13,13 +13,14 @@ import { defaultWslOrcadEnvironmentId } from '../../../wsl/orcad/wsl-orcad-deplo
 /**
  * A bridge project of the distro (local, on its UNC path or a drive mapped into it, not moved) or
  * its WSL host record. A host file that cannot be read counts as in use: a failed read never makes
- * a distro look gone. Drives are read only when nothing else keeps the distro; unread, in use.
+ * a distro look gone. Mapped drives come from last-known answers only: this runs in the
+ * background, where reading a share can boot its stopped distro. Unknown counts as in use.
  */
 export async function isDistroInUse(
   store: Pick<Store, 'getRepos' | 'getFolderWorkspaces'>,
   userDataPath: string,
   distro: string,
-  readMappedDrives?: () => Promise<readonly WslMappedDrive[] | 'unverifiable'>
+  lastKnownMappedDrives?: () => readonly WslMappedDrive[] | 'unverifiable'
 ): Promise<boolean> {
   const environmentId = defaultWslOrcadEnvironmentId(distro)
   try {
@@ -41,10 +42,10 @@ export async function isDistroInUse(
       return unc !== null && wslMoveJournalKey(unc.distro) === key
     })
   const onUnc = hasBridgeProject([])
-  if (onUnc || !readMappedDrives) {
+  if (onUnc || !lastKnownMappedDrives) {
     return onUnc
   }
-  const mappedDrives = await readMappedDrives().catch(() => 'unverifiable' as const)
+  const mappedDrives = lastKnownMappedDrives()
   return mappedDrives === 'unverifiable' || hasBridgeProject(mappedDrives)
 }
 

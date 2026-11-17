@@ -3,7 +3,6 @@
  * offered only where WSL hosts are: the internal gate open (the preload omits the API otherwise)
  * and the Experimental switch on. Main refuses every call with the gate closed regardless.
  */
-import { useEffect, useState } from 'react'
 import { useAppStore } from '@/store'
 import {
   getRepoExecutionHostId,
@@ -17,7 +16,7 @@ import {
   useWslHostsAcceptNewWork,
   useWslHostServerFilesMissing
 } from '../sidebar/use-wsl-hosts-enabled'
-import { resolveWslMappedDrivePath } from '../sidebar/wsl-mapped-drive-path'
+import { useWslMappedDriveShare } from './wsl-mapped-drive-share-store'
 import { openWslMoveDialog } from './wsl-move-dialog-store'
 import { selectFolderWorkspaces } from '@/store/workspaces/catalog/workspace-record-fields'
 import { findWslHostForDistro, wslMoveCatalogCandidates } from './wsl-move-scope-rows'
@@ -48,41 +47,6 @@ export type WslMoveTarget = {
 }
 
 const DRIVE_PATH = /^[A-Za-z]:[\\/]/
-const SHARE_CACHE_TTL_MS = 60_000
-// Per drive letter, so a menu opened again shows its item at once instead of after the lookup.
-const shareCache = new Map<string, { share: string | null; at: number }>()
-
-function cachedShare(letter: string): { share: string | null } | null {
-  const entry = shareCache.get(letter)
-  return entry && Date.now() - entry.at < SHARE_CACHE_TTL_MS ? entry : null
-}
-
-/** The share a drive letter maps to once main resolved it; null for any other drive. */
-function useMappedDriveShare(path: string | null): string | null {
-  const letter = path && DRIVE_PATH.test(path) ? path[0].toUpperCase() : null
-  const [resolved, setResolved] = useState<{ letter: string; share: string | null } | null>(null)
-  useEffect(() => {
-    if (!letter || cachedShare(letter)) {
-      return
-    }
-    let current = true
-    // Main bounds and caches the lookup per drive letter.
-    void resolveWslMappedDrivePath(`${letter}:\\`).then((share) => {
-      shareCache.set(letter, { share, at: Date.now() })
-      if (current) {
-        setResolved({ letter, share })
-      }
-    })
-    return () => {
-      current = false
-    }
-  }, [letter])
-  if (!letter) {
-    return null
-  }
-  return cachedShare(letter)?.share ?? (resolved?.letter === letter ? resolved.share : null)
-}
-
 /** The host a local project's folder could move to, or null where no move is offered. */
 export function useWslMoveTargetForPath(
   path: string | null | undefined,
@@ -92,7 +56,7 @@ export function useWslMoveTargetForPath(
   const serverFilesMissing = useWslHostServerFilesMissing()
   const environments = useAppStore((s) => s.runtimeEnvironments)
   const offered = enabled && !serverFilesMissing && isLocal && path ? path : null
-  const share = useMappedDriveShare(offered)
+  const share = useWslMappedDriveShare(offered)
   return offered ? wslMoveTargetOfPath(offered, share, environments) : null
 }
 

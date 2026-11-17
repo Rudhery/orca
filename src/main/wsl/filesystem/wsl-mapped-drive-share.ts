@@ -23,6 +23,8 @@ export type WslMappedDriveShareDeps = {
 type CacheEntry = { settledAt: number | null; lookup: Promise<string | null> }
 
 const cache = new Map<string, CacheEntry>()
+// Each letter's last settled answer from either lookup; background paths read only this.
+const lastKnown = new Map<string, string | null>()
 
 const defaultDeps: WslMappedDriveShareDeps = {
   platform: process.platform,
@@ -57,7 +59,7 @@ function startDriveLookup(key: string, deps: WslMappedDriveShareDeps): CacheEntr
   entry.lookup = deps.realpathRoot(`${key}:\\`).then(
     (real) => {
       entry.settledAt = deps.now()
-      return parseWslUncPath(real) ? real.replace(/[\\/]+$/, '') : null
+      return remember(key, real)
     },
     () => {
       // A failed lookup is asked again by the next add.
@@ -101,9 +103,57 @@ export async function resolveWslMappedDrivePath(
 /** What a drive letter maps to right now; `unverifiable` when Windows didn't answer in time. */
 export type WslMappedDriveRead = { share: string | null } | 'unverifiable'
 
+function remember(key: string, real: string): string | null {
+  const share = parseWslUncPath(real) ? real.replace(/[\\/]+$/, '') : null
+  lastKnown.set(key, share)
+  return share
+}
+
+type FreshLookup = { serial: number; settled: Promise<{ share: string | null }> }
+// Serials order fresh lookups, so a request can tell one started after it from an older one.
+let freshSerial = 0
+const freshLookups = new Map<string, FreshLookup>()
+
+function startFreshLookup(key: string, deps: WslMappedDriveShareDeps): FreshLookup {
+  const entry: FreshLookup = {
+    serial: ++freshSerial,
+    settled: deps.realpathRoot(`${key}:\\`).then(
+      (real) => ({ share: remember(key, real) }),
+      // No such drive, or not one Windows can resolve: nothing is mapped there.
+      () => ({ share: null })
+    )
+  }
+  freshLookups.set(key, entry)
+  void entry.settled.finally(() => {
+    if (freshLookups.get(key) === entry) {
+      freshLookups.delete(key)
+    }
+  })
+  return entry
+}
+
+/** Joins a lookup started after `after`; waits out an older one rather than stack another. */
+async function freshAnswer(
+  key: string,
+  deps: WslMappedDriveShareDeps,
+  after: number
+): Promise<{ share: string | null }> {
+  for (;;) {
+    const current = freshLookups.get(key)
+    if (!current) {
+      return startFreshLookup(key, deps).settled
+    }
+    if (current.serial > after) {
+      return current.settled
+    }
+    await current.settled
+  }
+}
+
 /**
  * Asks Windows again, bypassing the cache, for a decision that rewrites saved state: a drive
- * remapped within the cache's minute must not convert a project into another distro or folder.
+ * remapped within the cache's minute must not move a project into another distro or folder.
+ * Concurrent reads of a letter share one lookup, so a hung share pins one fs thread.
  */
 export async function readWslMappedDriveShareNow(
   letter: string,
@@ -117,14 +167,33 @@ export async function readWslMappedDriveShareNow(
   const timeout = new Promise<'unverifiable'>((resolve) => {
     timer = setTimeout(() => resolve('unverifiable'), timeoutMs)
   })
-  const lookup = deps.realpathRoot(`${letter.toUpperCase()}:\\`).then(
-    (real): WslMappedDriveRead => ({
-      share: parseWslUncPath(real) ? real.replace(/[\\/]+$/, '') : null
-    }),
-    // No such drive, or not one Windows can resolve: nothing is mapped there.
-    (): WslMappedDriveRead => ({ share: null })
-  )
-  return Promise.race([lookup, timeout]).finally(() => clearTimeout(timer))
+  const answer = freshAnswer(letter.toUpperCase(), deps, freshSerial)
+  return Promise.race([answer, timeout]).finally(() => clearTimeout(timer))
+}
+
+/** The letter's last answer, never read here; null before any lookup of it settled. */
+export function wslMappedDriveLastKnownShare(letter: string): { share: string | null } | null {
+  const key = letter.toUpperCase()
+  return lastKnown.has(key) ? { share: lastKnown.get(key) ?? null } : null
+}
+
+/**
+ * The letter's last answer, classifying an unknown letter with one bounded, cached lookup; null
+ * when that lookup did not settle in time.
+ */
+export async function classifyWslMappedDrive(
+  letter: string,
+  deps: WslMappedDriveShareDeps = defaultDeps
+): Promise<{ share: string | null } | null> {
+  if (deps.platform !== 'win32' || !/^[A-Za-z]$/.test(letter)) {
+    return { share: null }
+  }
+  const known = wslMappedDriveLastKnownShare(letter)
+  if (known) {
+    return known
+  }
+  await resolveDriveShare(letter, deps)
+  return wslMappedDriveLastKnownShare(letter)
 }
 
 /**
@@ -146,4 +215,6 @@ export function wslMappedDriveMatches(
 
 export function clearWslMappedDriveShareCacheForTests(): void {
   cache.clear()
+  lastKnown.clear()
+  freshLookups.clear()
 }

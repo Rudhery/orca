@@ -3,10 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Repo } from '../../../../shared/repository/repo-types'
-import {
-  findWindowsGitWorktreeRepoIds,
-  windowsGitWorktreePaths
-} from './wsl-move-windows-git-worktrees'
+import { findWindowsGitRefusals, windowsGitWorktreeVerdict } from './wsl-move-windows-git-worktrees'
 
 let root: string
 beforeEach(() => {
@@ -16,36 +13,59 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-function worktreeLink(repo: string, name: string, link: string): void {
-  const entry = join(repo, '.git', 'worktrees', name)
-  mkdirSync(entry, { recursive: true })
-  writeFileSync(join(entry, 'gitdir'), `${link}\n`)
+function write(path: string, text: string): void {
+  mkdirSync(join(path, '..'), { recursive: true })
+  writeFileSync(path, text)
 }
 
-describe('windowsGitWorktreePaths', () => {
-  it('names the worktrees whose links Git for Windows wrote', async () => {
+const verdict = (path: string) => windowsGitWorktreeVerdict(path, 'Ubuntu')
+
+describe('windowsGitWorktreeVerdict', () => {
+  it('refuses worktree records Git for Windows wrote, stale ones included', async () => {
     const repo = join(root, 'app')
-    worktreeLink(repo, 'win', 'W:/home/me/app-trees/win/.git')
-    worktreeLink(repo, 'linux', '/home/me/app-trees/linux/.git')
-    expect(await windowsGitWorktreePaths(repo, 'Ubuntu')).toEqual(['W:/home/me/app-trees/win'])
+    write(join(repo, '.git', 'worktrees', 'linux', 'gitdir'), '/home/me/trees/linux/.git\n')
+    expect(await verdict(repo)).toBe('ok')
+    write(join(repo, '.git', 'worktrees', 'gone', 'gitdir'), 'W:/home/me/trees/gone/.git\n')
+    expect(await verdict(repo)).toBe('windows-git-worktrees')
   })
 
-  it('names a repo that is itself a worktree Git for Windows created', async () => {
-    const repo = join(root, 'tree')
-    mkdirSync(repo)
-    writeFileSync(join(repo, '.git'), 'gitdir: W:/home/me/app/.git/worktrees/tree\n')
-    expect(await windowsGitWorktreePaths(repo, 'Ubuntu')).toEqual([repo])
+  it('checks a bare repo through its own records', async () => {
+    const bare = join(root, 'bare.git')
+    write(join(bare, 'HEAD'), 'ref: refs/heads/main\n')
+    mkdirSync(join(bare, 'objects'))
+    write(join(bare, 'worktrees', 'x', 'gitdir'), 'W:/home/me/x/.git\n')
+    expect(await verdict(bare)).toBe('windows-git-worktrees')
   })
 
-  it('finds none for a folder outside Git or a repo with Linux-only links', async () => {
-    expect(await windowsGitWorktreePaths(join(root, 'none'), 'Ubuntu')).toEqual([])
-    const repo = join(root, 'linux')
-    worktreeLink(repo, 'a', '/home/me/a/.git')
-    expect(await windowsGitWorktreePaths(repo, 'Ubuntu')).toEqual([])
+  it('refuses a `.git` file that names a Windows path, a worktree or a separate Git folder', async () => {
+    const tree = join(root, 'tree')
+    write(join(tree, '.git'), 'gitdir: W:/home/me/app/.git/worktrees/tree\n')
+    expect(await verdict(tree)).toBe('windows-git-dir')
+  })
+
+  it('follows a separate Git folder with no `commondir` to its own records', async () => {
+    const repo = join(root, 'separate')
+    write(join(repo, '.git'), 'gitdir: ../store.git\n')
+    write(join(root, 'store.git', 'worktrees', 'x', 'gitdir'), 'W:/home/me/x/.git\n')
+    expect(await verdict(repo)).toBe('windows-git-worktrees')
+  })
+
+  it('fails closed on records it cannot read; only a folder outside Git passes', async () => {
+    expect(await verdict(join(root, 'plain'))).toBe('ok')
+    const gitdirDir = join(root, 'a')
+    mkdirSync(join(gitdirDir, '.git', 'worktrees', 'x', 'gitdir'), { recursive: true })
+    await expect(verdict(gitdirDir)).rejects.toThrow()
+    const commonDirDir = join(root, 'b')
+    write(join(commonDirDir, '.git'), 'gitdir: ../bgit\n')
+    mkdirSync(join(root, 'bgit', 'commondir'), { recursive: true })
+    await expect(verdict(commonDirDir)).rejects.toThrow()
+    const worktreesFile = join(root, 'c')
+    write(join(worktreesFile, '.git', 'worktrees'), 'not a folder')
+    await expect(verdict(worktreesFile)).rejects.toThrow()
   })
 })
 
-describe('findWindowsGitWorktreeRepoIds', () => {
+describe('findWindowsGitRefusals', () => {
   const repo = (id: string, path: string): Repo => ({
     id,
     path,
@@ -55,13 +75,14 @@ describe('findWindowsGitWorktreeRepoIds', () => {
   })
   const W = { letter: 'W', share: '\\\\wsl.localhost\\Ubuntu' }
 
-  it('checks only mapped-drive repos, and fails closed on an unreadable one', async () => {
+  it('reads mapped-drive repos through the share, failing closed on errors and timeouts', async () => {
     const checked: string[] = []
-    const ids = await findWindowsGitWorktreeRepoIds(
+    const refusals = await findWindowsGitRefusals(
       [
         repo('win', 'W:\\home\\me\\win'),
         repo('clean', 'W:\\home\\me\\clean'),
         repo('broken', 'W:\\home\\me\\broken'),
+        repo('hung', 'W:\\home\\me\\hung'),
         repo('unc', '\\\\wsl.localhost\\Ubuntu\\home\\me\\unc')
       ],
       'Ubuntu',
@@ -71,10 +92,20 @@ describe('findWindowsGitWorktreeRepoIds', () => {
         if (path.endsWith('broken')) {
           throw new Error('EACCES')
         }
-        return path.endsWith('win') ? ['W:/home/me/win-tree'] : []
-      }
+        if (path.endsWith('hung')) {
+          return new Promise(() => {})
+        }
+        return path.endsWith('win') ? 'windows-git-worktrees' : 'ok'
+      },
+      20
     )
-    expect([...ids].sort()).toEqual(['broken', 'win'])
+    expect(Object.fromEntries(refusals)).toEqual({
+      win: 'windows-git-worktrees',
+      broken: 'git-unreadable',
+      hung: 'git-unreadable'
+    })
+    expect(checked).toContain('\\\\wsl.localhost\\Ubuntu\\home\\me\\win')
+    expect(checked.some((path) => path.startsWith('W:'))).toBe(false)
     expect(checked).not.toContain('\\\\wsl.localhost\\Ubuntu\\home\\me\\unc')
   })
 })

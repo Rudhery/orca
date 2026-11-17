@@ -35,6 +35,14 @@ describe('mapped-drive paths', () => {
     expect(wslMappedDriveFileUrlToLinux('file:///X:/home/me', 'Ubuntu', [W])).toBeNull()
   })
 
+  it('refuses a file URL whose `..` climbs out of the share, as the path form does', () => {
+    expect(wslMappedDriveFileUrlToLinux('file:///H:/a/../../etc/passwd', 'Ubuntu', [H])).toBeNull()
+    expect(wslMappedDriveFileUrlToLinux('file:///H:/a/%2E%2E/%2E%2E/etc', 'Ubuntu', [H])).toBeNull()
+    expect(wslMappedDriveFileUrlToLinux('file:///H:/me/../me/x', 'Ubuntu', [H])).toBe(
+      'file:///home/me/../me/x'
+    )
+  })
+
   it('restores a folded key case from the innermost moved root', () => {
     const roots = ['/home/me/App', '/home/me/App/Trees/Feature']
     expect(wslMappedDriveComparisonKeyToLinux('w:/home/me/app/src', 'Ubuntu', [W], roots)).toBe(

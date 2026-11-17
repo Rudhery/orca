@@ -1,80 +1,153 @@
 /**
- * A repo saved under a mapped drive may have linked worktrees Git for Windows created: their
- * `.git` files and `.git/worktrees/<name>/gitdir` links hold `W:/…` paths. The host's Linux Git
- * can't follow those, and its `git worktree prune` would delete their metadata, so such a repo
- * stays here (the opposite of wsl-drive-project-windows-git's `wsl-authored-worktrees`).
+ * A repo saved under a mapped drive usually runs Git for Windows, so its linked worktrees' links
+ * (`.git` files, `.git/worktrees/<name>/gitdir`) hold `W:/…` paths. The host's Linux Git can't
+ * follow those, and its `git worktree prune` would delete their records, so such a repo stays here
+ * (the opposite of wsl-drive-project-windows-git's `wsl-authored-worktrees`). Fails closed: only a
+ * folder with no Git at all passes without reading its records.
  */
-import { readFile, stat } from 'node:fs/promises'
+import type { Stats } from 'node:fs'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { toWindowsWslUncPath } from '../../../../shared/file-access/wsl-paths'
 import type { Repo } from '../../../../shared/repository/repo-types'
 import {
+  toWslDistroUncPath,
   wslMappedDriveOf,
   type WslMappedDrive
 } from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
-import {
-  isForeignLink,
-  readWorktreeLinks
-} from '../../../git/worktrees/removal/worktree-prune-guard'
+import { isForeignLink } from '../../../git/worktrees/removal/worktree-prune-guard'
 import { isLocalWslMoveRow } from '../quiescence/wsl-move-scope-guard'
+import type { WslMoveScopeRefusal } from './wsl-move-scope'
 
-/** The worktrees of the repo at `repoPath` whose links Git for Windows wrote; none outside Git. */
-export async function windowsGitWorktreePaths(repoPath: string, distro: string): Promise<string[]> {
-  const dotGit = join(repoPath, '.git')
-  const info = await stat(dotGit).catch((error: unknown) => {
-    // Only "no `.git`" means no Git; any other failure fails the check closed.
-    if (isMissing(error)) {
-      return null
-    }
-    throw error
-  })
-  if (!info) {
-    return []
-  }
-  let commonDir = dotGit
-  if (!info.isDirectory()) {
-    const link = /^gitdir:\s*(.+)$/m.exec(await readFile(dotGit, 'utf8'))?.[1]?.trim()
-    if (!link) {
-      return []
-    }
-    // The repo is itself a linked worktree Git for Windows created.
-    if (isForeignLink(link, true)) {
-      return [repoPath]
-    }
-    const gitDir = link.startsWith('/')
-      ? toWindowsWslUncPath(link, distro)
-      : resolve(repoPath, link)
-    const common = (await readFile(join(gitDir, 'commondir'), 'utf8').catch(() => '')).trim()
-    commonDir = common ? resolve(gitDir, common) : gitDir
-  }
-  return (await readWorktreeLinks(join(commonDir, 'worktrees')))
-    .filter(({ link }) => isForeignLink(link, true))
-    .map(({ link }) => link.replace(/[\\/]\.git$/, ''))
-}
+export type WslMoveWindowsGitVerdict =
+  | 'ok'
+  /** Worktree records (live or stale) whose links Git for Windows wrote. */
+  | 'windows-git-worktrees'
+  /** Its own `.git` file names a Windows path: a Git for Windows worktree or `--separate-git-dir`. */
+  | 'windows-git-dir'
+
+// Long enough for a cold distro share; a repo whose records don't answer by then stays here.
+const GIT_RECORDS_TIMEOUT_MS = 5_000
+
+const isWindowsLink = (link: string): boolean => isForeignLink(link, true)
 
 function isMissing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
 }
 
-/**
- * The local repos on a mapped drive with worktrees the host's Git can't use. A repo whose links
- * can't be read counts as one: the check fails closed.
- */
-export async function findWindowsGitWorktreeRepoIds(
+async function statOrNull(path: string): Promise<Stats | null> {
+  return stat(path).catch((error: unknown) => {
+    if (isMissing(error)) {
+      return null
+    }
+    throw error
+  })
+}
+
+/** A path Git wrote, as this process reads it: Linux paths through the distro's share. */
+function readable(base: string, link: string, distro: string): string {
+  return link.startsWith('/') ? toWindowsWslUncPath(link, distro) : resolve(base, link)
+}
+
+/** The repo's common Git directory, null outside Git, or the Windows-link verdict. */
+async function commonDirOf(
+  repoPath: string,
+  distro: string
+): Promise<{ commonDir: string } | null | 'windows-git-dir'> {
+  const dotGit = join(repoPath, '.git')
+  const info = await statOrNull(dotGit)
+  if (!info) {
+    const bare =
+      (await statOrNull(join(repoPath, 'HEAD'))) && (await statOrNull(join(repoPath, 'objects')))
+    return bare ? { commonDir: repoPath } : null
+  }
+  if (info.isDirectory()) {
+    return { commonDir: dotGit }
+  }
+  const link = /^gitdir:\s*(.+)$/m.exec(await readFile(dotGit, 'utf8'))?.[1]?.trim()
+  if (!link) {
+    throw new Error('git_link_unreadable')
+  }
+  if (isWindowsLink(link)) {
+    return 'windows-git-dir'
+  }
+  const gitDir = readable(repoPath, link, distro)
+  const common = await readFile(join(gitDir, 'commondir'), 'utf8').then(
+    (text) => text.trim(),
+    (error: unknown) => {
+      // No `commondir`: a separate Git folder, which is its own common directory.
+      if (isMissing(error)) {
+        return ''
+      }
+      throw error
+    }
+  )
+  if (common && isWindowsLink(common)) {
+    return 'windows-git-dir'
+  }
+  return { commonDir: common ? readable(gitDir, common, distro) : gitDir }
+}
+
+/** `repoPath` in a spelling this process reads (the share's, for a mapped drive). */
+export async function windowsGitWorktreeVerdict(
+  repoPath: string,
+  distro: string
+): Promise<WslMoveWindowsGitVerdict> {
+  const found = await commonDirOf(repoPath, distro)
+  if (found === null || found === 'windows-git-dir') {
+    return found ?? 'ok'
+  }
+  const admin = join(found.commonDir, 'worktrees')
+  const entries = await readdir(admin).catch((error: unknown) => {
+    if (isMissing(error)) {
+      return []
+    }
+    throw error
+  })
+  for (const entry of entries) {
+    // An unreadable record fails the check: it may be one the host's prune would delete.
+    const link = (await readFile(join(admin, entry, 'gitdir'), 'utf8')).trim()
+    if (isWindowsLink(link)) {
+      return 'windows-git-worktrees'
+    }
+  }
+  return 'ok'
+}
+
+async function verdictWithin(
+  check: () => Promise<WslMoveWindowsGitVerdict>,
+  timeoutMs: number
+): Promise<WslMoveWindowsGitVerdict | 'git-unreadable'> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<'git-unreadable'>((done) => {
+    timer = setTimeout(() => done('git-unreadable'), timeoutMs)
+  })
+  const verdict = check().catch((): 'git-unreadable' => 'git-unreadable')
+  return Promise.race([verdict, timeout]).finally(() => clearTimeout(timer))
+}
+
+/** The local mapped-drive repos the host's Git can't take, each with why; read via the share. */
+export async function findWindowsGitRefusals(
   repos: readonly Repo[],
   distro: string,
   mappedDrives: readonly WslMappedDrive[],
-  windowsGitWorktrees: (repoPath: string, distro: string) => Promise<string[]>
-): Promise<Set<string>> {
+  check: (readablePath: string, distro: string) => Promise<WslMoveWindowsGitVerdict>,
+  timeoutMs = GIT_RECORDS_TIMEOUT_MS
+): Promise<Map<string, WslMoveScopeRefusal>> {
   const onMappedDrive = repos.filter(
     (repo) => isLocalWslMoveRow(repo) && wslMappedDriveOf(repo.path, mappedDrives) !== null
   )
-  const found = await Promise.all(
-    onMappedDrive.map(async (repo) =>
-      (await windowsGitWorktrees(repo.path, distro).catch(() => [repo.path])).length > 0
-        ? [repo.id]
-        : []
-    )
+  const verdicts = await Promise.all(
+    onMappedDrive.map(async (repo) => {
+      const sharePath = toWslDistroUncPath(repo.path, mappedDrives)
+      return [repo.id, await verdictWithin(() => check(sharePath, distro), timeoutMs)] as const
+    })
   )
-  return new Set(found.flat())
+  const refusals = new Map<string, WslMoveScopeRefusal>()
+  for (const [id, verdict] of verdicts) {
+    if (verdict !== 'ok') {
+      refusals.set(id, verdict)
+    }
+  }
+  return refusals
 }

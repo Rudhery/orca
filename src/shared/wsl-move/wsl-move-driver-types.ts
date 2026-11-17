@@ -100,6 +100,8 @@ export type WslMoveRefusal = {
   /** User-facing, for `wsl_move_export_incomplete`. */
   reasons?: string[]
   detail?: string
+  /** With `wsl_move_nothing_new`: the projects that can't move, and why. */
+  refused?: { kind: 'repo' | 'folder-workspace'; id: string; reason: string }[]
 }
 
 export type WslMoveResult =

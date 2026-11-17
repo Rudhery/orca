@@ -74,6 +74,8 @@ export type WslMoveManifestExport = {
   worktrees: { sourceWorktreeId: string; destinationWorktreeId: string }[]
   /** Moved disabled (the wire carries no enabled automation); re-enable on the host after commit. */
   automationsToReenable: string[]
+  /** The mapped drive letters the export's paths named: the only ones the move journals. */
+  mappedDriveLetters?: string[]
 }
 
 /** The plan names a project or folder that is no longer a local row of this distro. */
@@ -170,7 +172,10 @@ export function exportWslMoveManifest(
   const dormantState = workspaceSession
     ? { ...inspection.payload, workspaceSession }
     : inspection.payload
-  const rewriter = createUncToLinuxPathRewriter(request.distro, request.mappedDrives)
+  const usedLetters = new Set<string>()
+  const rewriter = createUncToLinuxPathRewriter(request.distro, request.mappedDrives, (letter) =>
+    usedLetters.add(letter)
+  )
   const payload = rewriteOrcadMigrationPayloadPaths(
     { ...catalog, ...(hasDormantState(dormantState) ? { dormantState } : {}) },
     rewriter
@@ -215,7 +220,8 @@ export function exportWslMoveManifest(
       sourceWorktreeId,
       destinationWorktreeId: rewriteOrcadMigrationWorktreeId(sourceWorktreeId, rewriter)
     })),
-    automationsToReenable: inspection.automationsEnabledAtSource
+    automationsToReenable: inspection.automationsEnabledAtSource,
+    mappedDriveLetters: [...usedLetters].sort()
   }
 
   function isLocalRepo(repo: Repo): boolean {

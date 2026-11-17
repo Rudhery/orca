@@ -28,7 +28,8 @@ import type {
 } from '../manifest-scope/wsl-move-manifest-export'
 import type { WslMoveGateInputs } from '../quiescence/wsl-move-terminal-gate'
 import type { WslMappedDrive } from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
-import type { WslMappedDriveRead } from '../../../wsl/filesystem/wsl-mapped-drive-share'
+import type { WslMoveDriveShares } from '../manifest-scope/wsl-move-mapped-drives'
+import type { WslMoveWindowsGitVerdict } from '../manifest-scope/wsl-move-windows-git-worktrees'
 
 /** Throws `WslMoveScopeChangedError` when a planned row is gone: plan again. */
 export type WslMoveManifestExporter = (
@@ -76,10 +77,10 @@ export type WslMoveDriverDeps = {
    */
   isDistroRegistered: (distro: string, distroGuid?: string) => Promise<boolean | null>
   exportManifest: WslMoveManifestExporter
-  /** What a drive letter maps to right now, uncached; absent off Windows (no drive is mapped). */
-  readMappedDriveShare?: (letter: string) => Promise<WslMappedDriveRead>
-  /** Linked worktrees of a mapped-drive repo whose links Git for Windows wrote. */
-  windowsGitWorktrees?: (repoPath: string, distro: string) => Promise<string[]>
+  /** What drive letters map to; absent off Windows, where no drive is mapped. */
+  driveShares?: WslMoveDriveShares
+  /** Whether the host's Git can take a mapped-drive repo, read through its share path. */
+  windowsGitVerdict?: (readablePath: string, distro: string) => Promise<WslMoveWindowsGitVerdict>
   /** Busy, working, automation and dispatch facts for the scope, from their owning stores. */
   gateInputs: (scope: WslMoveTerminalScope) => Promise<WslMoveGateInputs>
   /** The panes the scope's live terminals belong to; read before Sleep ends their sessions. */

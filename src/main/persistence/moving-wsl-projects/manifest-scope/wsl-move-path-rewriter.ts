@@ -8,11 +8,20 @@ import type { OrcadMigrationPathRewriter } from '../../migrating-orcad-catalog/p
 
 export function createUncToLinuxPathRewriter(
   distro: string,
-  mappedDrives: readonly WslMappedDrive[] = []
+  mappedDrives: readonly WslMappedDrive[] = [],
+  /** Told each drive letter a rewrite mapped, so a move journals only the drives it names. */
+  onMappedDrive?: (letter: string) => void
 ): OrcadMigrationPathRewriter {
   const fileUrl = new RegExp(`^file://(?:wsl\\.localhost|wsl\\$)/([^/]+)(/.*)?$`, 'i')
+  const noted = (value: string, mapped: string | null): string | null => {
+    const letter = mapped === null ? null : DRIVE_LETTER.exec(value)?.[1]
+    if (letter) {
+      onMappedDrive?.(letter.toUpperCase())
+    }
+    return mapped
+  }
   const toLinux = (value: string): string | null =>
-    wslMoveSourcePathToLinux(value, distro, mappedDrives)
+    noted(value, wslMoveSourcePathToLinux(value, distro, mappedDrives))
   return {
     path: (value, form) => {
       switch (form) {
@@ -27,12 +36,15 @@ export function createUncToLinuxPathRewriter(
           if (match && decodeSegment(match[1]).toLowerCase() === distro.toLowerCase()) {
             return `file://${match[2] ?? '/'}`
           }
-          return wslMappedDriveFileUrlToLinux(value, distro, mappedDrives) ?? value
+          return noted(value, wslMappedDriveFileUrlToLinux(value, distro, mappedDrives)) ?? value
         }
       }
     }
   }
 }
+
+// A drive path (`W:\x`) or drive file URL (`file:///W:/x`); UNC paths name no letter.
+const DRIVE_LETTER = /^(?:file:\/\/\/)?([A-Za-z]):[\\/]/i
 
 // Relative Windows paths need host-side POSIX separators.
 function toPosix(value: string): string {

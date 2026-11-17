@@ -20,8 +20,23 @@ export type WslMoveScopeRefusal =
   | 'windows-drive'
   | 'mixed-locations'
   | 'not-local'
-  /** Linked worktrees Git for Windows created: the host's Git can't follow their links. */
+  /** Worktree records Git for Windows wrote: the host's Git can't follow their links. */
   | 'windows-git-worktrees'
+  /** Its own `.git` file names a Windows path (a worktree or separate Git folder). */
+  | 'windows-git-dir'
+  /** Its Git records couldn't be read in time, so they couldn't be checked. */
+  | 'git-unreadable'
+  /** Windows didn't say where its drive letter points just now. */
+  | 'mapped-drive-unverifiable'
+
+/** What the move learned about mapped drives before scoping. */
+export type WslMoveScopeDrives = {
+  mappedDrives?: readonly WslMappedDrive[]
+  /** Mapped-drive repos the host's Git can't take (wsl-move-windows-git-worktrees). */
+  windowsGitRefusals?: ReadonlyMap<string, WslMoveScopeRefusal>
+  /** Letters Windows didn't answer for that may map into this distro. */
+  unverifiableLetters?: readonly string[]
+}
 
 export type WslMoveScope = {
   repoIds: string[]
@@ -38,22 +53,29 @@ type WslMoveScopeState = {
 export function collectWslMoveScope(
   state: WslMoveScopeState,
   distro: string,
-  mappedDrives: readonly WslMappedDrive[] = [],
-  /** Mapped-drive repos with worktrees Git for Windows created (wsl-move-windows-git-worktrees). */
-  windowsGitWorktreeRepoIds: ReadonlySet<string> = new Set()
+  drives: WslMoveScopeDrives = {}
 ): WslMoveScope {
   const scope: WslMoveScope = { repoIds: [], folderWorkspaceIds: [], refused: [] }
+  const mappedDrives = drives.mappedDrives ?? []
   const toLinux = (path: string): string | null =>
     wslMoveSourcePathToLinux(path, distro, mappedDrives)
+  // Listed, not dropped: the drive may well map here, so the user should check it again.
+  const unverifiable = (path: string): boolean =>
+    drives.unverifiableLetters?.includes(/^([A-Za-z]):[\\/]/.exec(path)?.[1].toUpperCase() ?? '') ??
+    false
   for (const repo of state.repos) {
     const paths = wslMoveMappedRepoPaths(repo, mappedDrives)
+    const local = getRepoExecutionHostId(repo) === 'local'
+    if (local && unverifiable(repo.path)) {
+      scope.refused.push({ kind: 'repo', id: repo.id, reason: 'mapped-drive-unverifiable' })
+      continue
+    }
     // Partly in-distro repos must refuse visibly rather than disappear from the preview.
     if (!paths.some((path) => toLinux(path) !== null)) {
       continue
     }
     const reason =
-      refusalFor(paths, toLinux, getRepoExecutionHostId(repo) !== 'local') ??
-      (windowsGitWorktreeRepoIds.has(repo.id) ? 'windows-git-worktrees' : null)
+      refusalFor(paths, toLinux, !local) ?? drives.windowsGitRefusals?.get(repo.id) ?? null
     if (reason) {
       scope.refused.push({ kind: 'repo', id: repo.id, reason })
     } else {
@@ -65,14 +87,16 @@ export function collectWslMoveScope(
     projectGroups: [...state.projectGroups]
   }
   for (const workspace of state.folderWorkspaces) {
-    if (toLinux(workspace.folderPath) === null) {
-      continue
-    }
     // Isolate this row: other hosts may reuse the same folder ID.
     const remote =
       resolveFolderWorkspaceHost({ ...hostState, folderWorkspaces: [workspace] }, workspace.id)
         .kind !== 'local'
-    const reason = refusalFor([workspace.folderPath], toLinux, remote)
+    if (toLinux(workspace.folderPath) === null && (remote || !unverifiable(workspace.folderPath))) {
+      continue
+    }
+    const reason = unverifiable(workspace.folderPath)
+      ? 'mapped-drive-unverifiable'
+      : refusalFor([workspace.folderPath], toLinux, remote)
     if (reason) {
       scope.refused.push({ kind: 'folder-workspace', id: workspace.id, reason })
     } else {

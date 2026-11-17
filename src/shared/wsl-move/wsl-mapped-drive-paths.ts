@@ -83,11 +83,20 @@ export function wslMappedDriveFileUrlToLinux(
   const match = mappedDrives.length > 0 ? DRIVE_FILE_URL.exec(url) : null
   const drive = match ? wslMappedDriveOf(`${match[1]}:\\`, mappedDrives) : null
   const root = drive ? wslUncPathToLinux(drive.share, distro) : null
-  if (!match || root === null) {
+  if (!match || !drive || root === null || !staysOnShare(match[2] ?? '/', drive)) {
     return null
   }
   const encodedRoot = root === '/' ? '' : root.split('/').map(encodeURIComponent).join('/')
   return `file://${encodedRoot}${match[2] ?? '/'}${match[3] ?? ''}`
+}
+
+/** A URL tail that, decoded, stays inside the share, as the path form requires. */
+function staysOnShare(tail: string, drive: WslMappedDrive): boolean {
+  try {
+    return wslMappedDrivePathToShare(`${drive.letter}:${decodeURIComponent(tail)}`, drive) !== null
+  } catch {
+    return false
+  }
 }
 
 /**

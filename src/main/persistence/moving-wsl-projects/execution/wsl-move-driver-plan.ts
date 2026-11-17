@@ -14,7 +14,7 @@ import {
 } from '../../../../shared/wsl-move/wsl-move-cutover'
 import { wslHostsAcceptNewWork } from '../../../wsl/host-lifecycle/wsl-host-gate'
 import type { WslMappedDrive } from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
-import { readWslMoveSourceDrives } from './wsl-move-driver-source-drives'
+import { journaledWslMoveDrives, readWslMoveSourceDrives } from './wsl-move-driver-source-drives'
 import { listWslMoveCutoverChain } from '../cutover-recovery/wsl-move-cutover-journal'
 
 import { type WslMovePlan, planWslMove } from '../manifest-scope/wsl-move-delta-plan'
@@ -238,7 +238,7 @@ export async function prepareWslMove(
       ? { repoIds: request.repoIds ?? [], folderWorkspaceIds: request.folderWorkspaceIds ?? [] }
       : undefined
   const catalog = deps.readCatalog()
-  const drives = await readWslMoveSourceDrives(deps, catalog, request.distro, expectedMappedDrives)
+  const drives = await readWslMoveSourceDrives(deps, catalog, request, expectedMappedDrives)
   if ('outcome' in drives) {
     return drives
   }
@@ -248,13 +248,12 @@ export async function prepareWslMove(
     request.distro,
     await host.readHolding(),
     selection,
-    drives.mappedDrives,
-    drives.windowsGitWorktreeRepoIds
+    drives
   )
   if (planned.outcome === 'refused') {
-    return refusal(planned.code)
+    return refusal(planned.code, planned.refused?.length ? { refused: planned.refused } : {})
   }
-  const { plan } = planned
+  let { plan } = planned
   // A delta goes to the host its chain already moved into; another host would split the projects.
   if (plan.destinationEnvironmentId && plan.destinationEnvironmentId !== host.environmentId) {
     return refusal('wsl_move_host_unavailable', { detail: 'destination_changed' })
@@ -266,6 +265,10 @@ export async function prepareWslMove(
       return refusal('wsl_move_export_incomplete', { reasons: [...exported.blockers] })
     }
     assertWslMoveManifestFits(exported.manifest)
+    plan = {
+      ...plan,
+      mappedDrives: journaledWslMoveDrives(drives.mappedDrives, exported.mappedDriveLetters)
+    }
   } catch (error) {
     const tooLarge = manifestTooLargeRefusal(error)
     if (tooLarge) {

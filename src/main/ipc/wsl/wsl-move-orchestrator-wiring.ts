@@ -17,7 +17,7 @@ import type { Store } from '../../persistence/loading-store/store'
 import { listWslMoveCutoverChain } from '../../persistence/moving-wsl-projects/cutover-recovery/wsl-move-cutover-journal'
 import { moveProjectsToWslHost } from '../../persistence/moving-wsl-projects/wsl-move-driver'
 import { previewWslMove } from '../../persistence/moving-wsl-projects/execution/wsl-move-driver-preview'
-import { readWslMoveDistroMappedDrives } from './wsl-move-mapped-drive-ports'
+import { wslMoveDistroMappedDrivesLastKnown } from './wsl-move-mapped-drive-ports'
 import { wslMovedDistroVerdict } from '../../persistence/moving-wsl-projects/quiescence/wsl-move-moved-distro-check'
 import { WslMoveOrchestrator } from '../../persistence/moving-wsl-projects/wsl-move-orchestrator'
 import type {
@@ -139,11 +139,8 @@ function createOrchestrator(
     autoMovesBridgeProjects: wslMoveAutoMovesBridgeProjects,
     prepareHost: (distro, stillWanted) => prepareHost(userDataPath, distro, stillWanted),
     isDistroInUse: async (distro) =>
-      await isDistroInUse(
-        store,
-        userDataPath,
-        distro,
-        readWslMoveDistroMappedDrives(store, distro)
+      await isDistroInUse(store, userDataPath, distro, () =>
+        wslMoveDistroMappedDrivesLastKnown(store, distro)
       ),
     hostRemovalPending: async (distro) => await wslHostRemovalPending(userDataPath, distro),
     hasHost: async (distro) =>

@@ -34,7 +34,7 @@ import {
   wslMoveTakenRowIdentity,
   type WslMoveRowRef
 } from '../cutover-recovery/wsl-move-retained-source'
-import { collectWslMoveScope, type WslMoveScope } from './wsl-move-scope'
+import { collectWslMoveScope, type WslMoveScope, type WslMoveScopeDrives } from './wsl-move-scope'
 import { isLocalWslMoveRow } from '../quiescence/wsl-move-scope-guard'
 
 type WslMovePlanState = {
@@ -80,7 +80,7 @@ export type WslMovePlan = {
 
 export type WslMovePlanResult =
   | { outcome: 'ready'; plan: WslMovePlan }
-  | { outcome: 'refused'; code: WslMovePlanRefusal }
+  | { outcome: 'refused'; code: WslMovePlanRefusal; refused?: WslMoveScope['refused'] }
 
 const COMMITTED_FROM = WSL_MOVE_CUTOVER_PHASES.indexOf('destination-committed')
 
@@ -100,8 +100,7 @@ export function planWslMove(
   host: WslMoveHostHolding,
   /** The projects the user ticked; absent means the whole distro. */
   selection?: { repoIds: readonly string[]; folderWorkspaceIds: readonly string[] },
-  mappedDrives: readonly WslMappedDrive[] = [],
-  windowsGitWorktreeRepoIds: ReadonlySet<string> = new Set()
+  drives: WslMoveScopeDrives = {}
 ): WslMovePlanResult {
   const journalKey = wslMoveJournalKey(distro)
   const chain = listWslMoveCutoverChain(userDataPath, journalKey)
@@ -127,7 +126,7 @@ export function planWslMove(
       .flatMap((cutover) => wslMoveScopeRefs(cutover).map(wslMoveRowKey))
   )
   const held = new Set(refsOf(host).map(wslMoveRowKey))
-  const scope = collectWslMoveScope(state, distro, mappedDrives, windowsGitWorktreeRepoIds)
+  const scope = collectWslMoveScope(state, distro, drives)
   const selected = (ref: WslMoveRowRef): boolean =>
     !selection ||
     (ref.kind === 'repo' ? selection.repoIds : selection.folderWorkspaceIds).includes(ref.id)
@@ -154,7 +153,9 @@ export function planWslMove(
     let keys = ownerScopes.get(owner.migrationId)
     if (!keys) {
       keys = new Set(
-        refsOf(collectWslMoveScope(state, distro, owner.mappedDrives)).map(wslMoveRowKey)
+        refsOf(collectWslMoveScope(state, distro, { mappedDrives: owner.mappedDrives })).map(
+          wslMoveRowKey
+        )
       )
       ownerScopes.set(owner.migrationId, keys)
     }
@@ -191,7 +192,8 @@ export function planWslMove(
     }
   }
   if (fresh.length === 0) {
-    return { outcome: 'refused', code: 'wsl_move_nothing_new' }
+    // The reasons go along, or "already on the host" would hide why nothing can move.
+    return { outcome: 'refused', code: 'wsl_move_nothing_new', refused: scope.refused }
   }
   return {
     outcome: 'ready',
@@ -212,7 +214,7 @@ export function planWslMove(
       removed,
       heldByHost,
       refused: scope.refused,
-      mappedDrives: mappedDrives.map((drive) => ({ ...drive }))
+      mappedDrives: (drives.mappedDrives ?? []).map((drive) => ({ ...drive }))
     }
   }
 }
