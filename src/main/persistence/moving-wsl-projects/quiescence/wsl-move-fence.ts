@@ -7,6 +7,7 @@ import {
 } from '../../../../shared/wsl-move/wsl-move-cutover'
 import { scanWslMoveCutovers } from '../cutover-recovery/wsl-move-cutover-journal'
 import { comparableWslPath } from '../manifest-scope/wsl-move-comparable-path'
+import { wslMappedDrivePathToShare } from '../../../../shared/wsl-move/wsl-drive-unc-respelling'
 import { wslMoveScopeRootPaths } from '../manifest-scope/wsl-move-scope-roots'
 import {
   listWslDriveUncConversions,
@@ -72,9 +73,13 @@ export function withWslDriveUncConversions(
   }
   const fencedRoots = [
     ...fence.fencedRoots,
-    ...pending.map(({ distro, rootPaths }) => ({
+    ...pending.map(({ distro, rootPaths, mappedDrive }) => ({
       distro,
-      roots: rootPaths.flatMap((root) => comparableWslPath(root, distro) ?? [])
+      roots: rootPaths.flatMap((root) => {
+        // A mapped drive's folder is fenced by its share path, the spelling a spawn there resolves to.
+        const unc = mappedDrive ? wslMappedDrivePathToShare(root, mappedDrive) : root
+        return (unc && comparableWslPath(unc, distro)) ?? []
+      })
     }))
   ]
   return { ...fence, fenced, fencedRoots }

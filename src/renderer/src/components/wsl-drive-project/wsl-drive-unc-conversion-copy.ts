@@ -1,4 +1,7 @@
-/** Plain-language copy for why a UNC Windows-drive project can't be converted right now. */
+/**
+ * Plain-language copy for why a UNC Windows-drive project can't be converted right now, or why a
+ * mapped-drive project (`mappedDriveLetter`) can't be reopened at its share path.
+ */
 import { translate } from '@/i18n/i18n'
 import type {
   WslDriveUncConversionBlocker,
@@ -8,11 +11,18 @@ import { wslDriveProjectBlockerMessage } from './wsl-drive-project-copy'
 
 export function wslDriveUncConversionMessages(
   result: Exclude<WslDriveUncConversionResult, { outcome: 'restarting' }>,
-  drivePath: string
+  /** Where the project would reopen: its drive path, or its share path for a mapped drive. */
+  drivePath: string,
+  mappedDriveLetter?: string
 ): string[] {
   switch (result.outcome) {
     case 'refused':
-      return result.blockers.map((blocker) => blockerMessage(blocker, drivePath))
+      return result.blockers.map((blocker) =>
+        mappedDriveLetter
+          ? (mappedDriveBlockerMessage(blocker, mappedDriveLetter) ??
+            blockerMessage(blocker, drivePath))
+          : blockerMessage(blocker, drivePath)
+      )
     case 'terminals-blocked':
       return [
         translate(
@@ -30,8 +40,47 @@ export function wslDriveUncConversionMessages(
   }
 }
 
+/** The mapped-drive wording where D1c's would name the wrong place; null to use D1c's. */
+function mappedDriveBlockerMessage(
+  blocker: WslDriveUncConversionBlocker,
+  letter: string
+): string | null {
+  if (blocker.kind === 'drive-not-mapped') {
+    return translate(
+      'wslDriveUnc.mappedDrive.notMapped',
+      'Drive {{letter}}: no longer points into this distro, so nothing changed.',
+      { letter }
+    )
+  }
+  if (blocker.kind !== 'not-convertible') {
+    return null
+  }
+  switch (blocker.reason) {
+    case 'mixed-locations':
+      return translate(
+        'wslDriveUnc.mappedDrive.mixed',
+        'Some of this project’s folders aren’t on drive {{letter}}:, so they can’t move with it.',
+        { letter }
+      )
+    case 'not-local':
+    case 'not-in-scope':
+      return translate(
+        'wslDriveUnc.mappedDrive.notOnDrive',
+        'This project isn’t on drive {{letter}}: on this computer.',
+        { letter }
+      )
+    default:
+      return null
+  }
+}
+
 function blockerMessage(blocker: WslDriveUncConversionBlocker, drivePath: string): string {
   switch (blocker.kind) {
+    case 'drive-not-mapped':
+      return translate(
+        'wslDriveUnc.blocker.driveNotMapped',
+        'That drive no longer points into this distro, so nothing changed.'
+      )
     case 'conversion-pending':
       return translate(
         'wslDriveUnc.blocker.pending',
@@ -81,6 +130,11 @@ function blockerMessage(blocker: WslDriveUncConversionBlocker, drivePath: string
           return translate(
             'wslDriveUnc.blocker.overlap',
             'This project shares folders with a project Orca can’t convert, so they would split.'
+          )
+        case 'windows-drive-folder':
+          return translate(
+            'wslDriveUnc.blocker.windowsDriveFolder',
+            'This folder is a Windows drive seen through WSL, so it stays on this computer.'
           )
         case 'not-local':
         case 'not-in-scope':

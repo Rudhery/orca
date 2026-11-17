@@ -1,7 +1,8 @@
 /**
- * The profile state of UNC Windows-drive projects converted to their drive paths (D1c): each field
- * that can name one is re-keyed by wsl-drive-unc-identity-rewrite.ts, and the projects switch to
- * Git for Windows with their terminals still in the distro. Pure; the caller writes the result.
+ * The profile state of UNC Windows-drive projects converted to their drive paths (D1c), or of
+ * mapped-drive projects respelled to their share: each field that can name one is re-keyed by
+ * wsl-drive-unc-identity-rewrite.ts. D1c projects also switch to Git for Windows with their
+ * terminals still in the distro. Pure; the caller writes the result.
  */
 import { composeWorktreeHostIdentity } from '../../../shared/worktree/host-qualified-identity'
 import { LOCAL_EXECUTION_HOST_ID } from '../../../shared/execution-host/execution-host'
@@ -23,7 +24,11 @@ import { withCrossStoreChildKey } from '../../../shared/worktree/lineage/cross-s
 import { WSL_DRIVE_UNC_STATE_DISPOSITIONS } from '../../../shared/wsl-move/wsl-drive-unc-state-dispositions'
 import { wslMoveRepoPaths } from '../../persistence/moving-wsl-projects/manifest-scope/wsl-move-scope'
 import { withoutDiscoveryShadows } from './wsl-drive-unc-discovery-shadows'
-import { wslUncDrivePathToWindows } from '../../../shared/file-access/wsl-paths'
+import {
+  wslDriveUncRespelling,
+  type WslDriveUncRespelling,
+  type WslMappedDrive
+} from '../../../shared/wsl-move/wsl-drive-unc-respelling'
 import {
   createWslDriveUncRewriter,
   mergeWslDriveUncKeyedEntries,
@@ -35,6 +40,8 @@ export type WslDriveUncStateScope = {
   distro: string
   repoIds: readonly string[]
   folderWorkspaceIds: readonly string[]
+  /** Set for a mapped drive respelled to its share; its runtime choices stay as they were. */
+  mappedDrive?: WslMappedDrive | null
 }
 
 export type WslDriveUncStateRewrite = {
@@ -54,10 +61,12 @@ export function rewriteWslDriveUncState(
   const state = withoutDiscoveryShadows(saved, worktreeIds)
   const rewriter = createWslDriveUncRewriter({
     distro: scope.distro,
+    mappedDrive: scope.mappedDrive,
     repoIds,
     folderWorkspaceIds,
     roots
   })
+  const respelling = wslDriveUncRespelling(scope)
   const next: PersistedState = { ...state }
   for (const [field, disposition] of Object.entries(WSL_DRIVE_UNC_STATE_DISPOSITIONS)) {
     if (disposition === 'rewrite' && isStateField(field) && state[field] !== undefined) {
@@ -70,13 +79,15 @@ export function rewriteWslDriveUncState(
       rewriter
     )
   }
-  next.projects = sameIfUnchanged(
-    next.projects,
-    withWindowsGit(next.projects, repoIds, scope.distro)
-  )
+  if (!scope.mappedDrive) {
+    next.projects = sameIfUnchanged(
+      next.projects,
+      withWindowsGit(next.projects, repoIds, scope.distro)
+    )
+  }
   next.projectGroups = sameIfUnchanged(
     next.projectGroups,
-    withConvertedGroupFolders(next, repoIds, folderWorkspaceIds, scope.distro)
+    withConvertedGroupFolders(next, repoIds, folderWorkspaceIds, respelling)
   )
   next.worktreeMeta = withPriorIds(next.worktreeMeta, worktreeIds, (id) => [id])
   if (next.worktreeMetaByIdentity) {
@@ -148,6 +159,7 @@ function collectRewriteRoots(
   ]
   const ids = createWslDriveUncRewriter({
     distro: scope.distro,
+    mappedDrive: scope.mappedDrive,
     repoIds,
     folderWorkspaceIds,
     roots
@@ -245,7 +257,7 @@ function withConvertedGroupFolders(
   state: PersistedState,
   repoIds: ReadonlySet<string>,
   folderWorkspaceIds: ReadonlySet<string>,
-  distro: string
+  respelling: WslDriveUncRespelling
 ): PersistedState['projectGroups'] {
   return state.projectGroups.map((group) => {
     const members = [
@@ -256,7 +268,7 @@ function withConvertedGroupFolders(
         .filter((folder) => folder.projectGroupId === group.id)
         .map((folder) => folderWorkspaceIds.has(folder.id))
     ]
-    const parentPath = group.parentPath && wslUncDrivePathToWindows(group.parentPath, distro)
+    const parentPath = group.parentPath && respelling.path(group.parentPath)
     return parentPath && members.length > 0 && members.every(Boolean)
       ? { ...group, parentPath }
       : group

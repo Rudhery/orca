@@ -33,7 +33,9 @@ import {
 import { adoptWslMoveProgress } from './wsl-move-run-adoption'
 import { closeWslMoveDialog, reloadAfterWslMove } from './wsl-move-dialog-close'
 import { RecoverableRenderErrorBoundary } from '../error-boundaries/RecoverableRenderErrorBoundary'
-import { useWslHostsEnabled } from '../sidebar/use-wsl-hosts-enabled'
+import { useWslHostsAcceptNewWork, useWslHostsEnabled } from '../sidebar/use-wsl-hosts-enabled'
+import { WslMappedDriveMoveDialog } from './WslMappedDriveMoveDialog'
+import { openWslMappedDriveMovesDue } from './wsl-mapped-drive-move-store'
 import { useConfirmationDialog } from '../confirmation-dialog-context'
 import { useWslMoveQuitGuard } from './use-wsl-move-quit-guard'
 import { WslMovePreviewBody, wslMoveNotMovingLines } from './WslMovePreviewBody'
@@ -114,11 +116,29 @@ export function WslMoveDialogHost(): React.JSX.Element | null {
         : undefined,
     [enabled]
   )
-  return open ? (
-    <RecoverableRenderErrorBoundary boundaryId="modal.wsl-move" surface="modal" compact>
-      <WslMoveDialog />
-    </RecoverableRenderErrorBoundary>
-  ) : null
+  // The restart that reopened mapped-drive projects at their share path continues into their move.
+  const acceptsNewWork = useWslHostsAcceptNewWork()
+  useEffect(() => {
+    if (acceptsNewWork) {
+      void openWslMappedDriveMovesDue()
+    }
+  }, [acceptsNewWork])
+  return (
+    <>
+      {open ? (
+        <RecoverableRenderErrorBoundary boundaryId="modal.wsl-move" surface="modal" compact>
+          <WslMoveDialog />
+        </RecoverableRenderErrorBoundary>
+      ) : null}
+      <RecoverableRenderErrorBoundary
+        boundaryId="modal.wsl-mapped-drive-move"
+        surface="modal"
+        compact
+      >
+        <WslMappedDriveMoveDialog />
+      </RecoverableRenderErrorBoundary>
+    </>
+  )
 }
 
 function WslMoveDialog(): React.JSX.Element | null {

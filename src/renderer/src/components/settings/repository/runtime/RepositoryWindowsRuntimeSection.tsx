@@ -51,7 +51,7 @@ export function RepositoryWindowsRuntimeSection({
 }: RepositoryWindowsRuntimeSectionProps): React.JSX.Element | null {
   const t = useTranslate()
   // Owner decision: for a WSL project with a host, the runtime toggle becomes "Move project".
-  const wslMoveDistro = useWslMoveTargetForRepo(repo)
+  const wslMoveTarget = useWslMoveTargetForRepo(repo)
   // D1c ships with WSL hosts; serve-only, a live block or the setting off hide its offers, as main
   // refuses them. A project already on Git for Windows still shows that state.
   const d1cAvailable = useWslHostsAcceptNewWork()
@@ -79,8 +79,8 @@ export function RepositoryWindowsRuntimeSection({
       className="space-y-3"
       forceVisible={forceVisible || matchesSettingsSearch(searchQuery, searchEntries)}
     >
-      {wslMoveDistro && repo ? (
-        <WslMoveRuntimeRow distro={wslMoveDistro} repoId={repo.id} />
+      {wslMoveTarget && repo ? (
+        <WslMoveRuntimeRow target={wslMoveTarget} repoId={repo.id} name={repoDisplayName} />
       ) : (
         <ProjectWindowsRuntimeSetting
           project={project}

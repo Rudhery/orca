@@ -12,6 +12,8 @@ import {
 } from '../../../../shared/execution-host/execution-host'
 import type { WslMoveRowRef } from '../../../../shared/wsl-move/wsl-move-driver-types'
 import { openWslMoveDialogFor } from '../wsl-move/wsl-move-entry'
+import { openWslMappedDriveMove } from '../wsl-move/wsl-mapped-drive-move-store'
+import { resolveWslMappedDrivePath } from './wsl-mapped-drive-path'
 import { wslMoveDistroOfPath } from '../wsl-move/wsl-move-scope-rows'
 import type { WslHostOffer } from './wsl-host-offer-actions'
 
@@ -55,7 +57,7 @@ export function wslHostOfferProjectRef(path: string): WslMoveRowRef | null {
 }
 
 /** The repo a local add answered with (new or already saved); null for any other outcome. */
-function addedRepoOf(added: unknown): { id: string; path: string } | null {
+function addedRepoOf(added: unknown): { id: string; path: string; name: string } | null {
   if (typeof added !== 'object' || added === null || !('repo' in added)) {
     return null
   }
@@ -66,7 +68,14 @@ function addedRepoOf(added: unknown): { id: string; path: string } | null {
     typeof repo.id === 'string' &&
     'path' in repo &&
     typeof repo.path === 'string'
-    ? { id: repo.id, path: repo.path }
+    ? {
+        id: repo.id,
+        path: repo.path,
+        name:
+          'displayName' in repo && typeof repo.displayName === 'string'
+            ? repo.displayName
+            : repo.path
+      }
     : null
 }
 
@@ -74,17 +83,35 @@ function addedRepoOf(added: unknown): { id: string; path: string } | null {
  * Opens the move with only the offered project checked; the user's Move is what moves it.
  * `added` is the add's answer, which names an already-saved project the path resolved to.
  */
+async function moveSavedUnderMappedDrive(
+  offer: WslHostOffer,
+  repo: { id: string; path: string; name: string }
+): Promise<void> {
+  const sharePath = await resolveWslMappedDrivePath(repo.path)
+  if (sharePath && wslMoveDistroOfPath(sharePath)?.toLowerCase() === offer.distro.toLowerCase()) {
+    openWslMappedDriveMove({
+      distro: offer.distro,
+      letter: repo.path[0].toUpperCase(),
+      sharePath,
+      ref: { kind: 'repo', id: repo.id },
+      name: repo.name
+    })
+    return
+  }
+  toast.error(
+    translate(
+      'sidebar.wslHostOffer.savedUnderAnotherPath',
+      "This folder is already a project here as {{path}}, which can't move to the {{distro}} host yet. Remove that project, then add the folder again to move it.",
+      { path: repo.path, distro: offer.distro }
+    )
+  )
+}
+
 export function moveWslHostOfferProject(offer: WslHostOffer, added?: unknown): void {
   const repo = addedRepoOf(added)
-  // The same folder was already saved under another spelling (`W:\…`), which the move can't take.
+  // The same folder was already saved under another spelling (`W:\…`): reopen it at its share first.
   if (repo && wslMoveDistroOfPath(repo.path)?.toLowerCase() !== offer.distro.toLowerCase()) {
-    toast.error(
-      translate(
-        'sidebar.wslHostOffer.savedUnderAnotherPath',
-        "This folder is already a project here as {{path}}, which can't move to the {{distro}} host yet. Remove that project, then add the folder again to move it.",
-        { path: repo.path, distro: offer.distro }
-      )
-    )
+    void moveSavedUnderMappedDrive(offer, repo)
     return
   }
   const only = repo

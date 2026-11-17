@@ -2,8 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const toastError = vi.hoisted(() => vi.fn())
 const openWslMoveDialogFor = vi.hoisted(() => vi.fn())
+const openWslMappedDriveMove = vi.hoisted(() => vi.fn())
+const resolveWslMappedDrivePath = vi.hoisted(() =>
+  vi.fn(async (_path: string): Promise<string | null> => null)
+)
 vi.mock('sonner', () => ({ toast: { error: toastError } }))
 vi.mock('../wsl-move/wsl-move-entry', () => ({ openWslMoveDialogFor }))
+vi.mock('../wsl-move/wsl-mapped-drive-move-store', () => ({ openWslMappedDriveMove }))
+vi.mock('./wsl-mapped-drive-path', () => ({ resolveWslMappedDrivePath }))
 
 import { useAppStore } from '@/store'
 import { moveWslHostOfferProject } from './wsl-host-offer-move'
@@ -20,6 +26,9 @@ const offer = {
 afterEach(() => {
   toastError.mockReset()
   openWslMoveDialogFor.mockReset()
+  openWslMappedDriveMove.mockReset()
+  resolveWslMappedDrivePath.mockReset()
+  resolveWslMappedDrivePath.mockResolvedValue(null)
   useAppStore.setState(initialState, true)
 })
 
@@ -33,14 +42,35 @@ describe('moveWslHostOfferProject', () => {
     expect(toastError).not.toHaveBeenCalled()
   })
 
-  it('explains instead of opening a move when the add found the folder saved as W:', () => {
+  it('reopens a project the add found saved as W: at its share path before the move', async () => {
     // Registration matches by real path, so the share spelling resolves to the saved W: row.
+    resolveWslMappedDrivePath.mockResolvedValue(offer.sharePath)
+    moveWslHostOfferProject(offer, {
+      status: 'completed',
+      repo: { id: 'repo-w', path: 'W:\\home\\u\\repo', displayName: 'repo' }
+    })
+    await vi.waitFor(() =>
+      expect(openWslMappedDriveMove).toHaveBeenCalledWith({
+        distro: 'Ubuntu',
+        letter: 'W',
+        sharePath: offer.sharePath,
+        ref: { kind: 'repo', id: 'repo-w' },
+        name: 'repo'
+      })
+    )
+    expect(openWslMoveDialogFor).not.toHaveBeenCalled()
+    expect(toastError).not.toHaveBeenCalled()
+  })
+
+  it('explains when the saved spelling no longer maps into the offered distro', async () => {
     moveWslHostOfferProject(offer, {
       status: 'completed',
       repo: { id: 'repo-w', path: 'W:\\home\\u\\repo' }
     })
-    expect(openWslMoveDialogFor).not.toHaveBeenCalled()
-    expect(toastError).toHaveBeenCalledWith(expect.stringContaining('W:\\home\\u\\repo'))
+    await vi.waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(expect.stringContaining('W:\\home\\u\\repo'))
+    )
+    expect(openWslMappedDriveMove).not.toHaveBeenCalled()
   })
 
   it('falls back to the share spelling when the add names no repo', () => {

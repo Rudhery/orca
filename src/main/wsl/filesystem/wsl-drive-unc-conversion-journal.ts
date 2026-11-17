@@ -2,12 +2,14 @@
  * The journal of a UNC Windows-drive project conversion (D1c): `wsl-drive-unc-conversions/<id>.json`
  * beside the profile. Written once the scope's panes are asleep, and read at the next startup,
  * before the profile loads, which runs the conversion. Its own directory, so an older build never
- * reads it as a move.
+ * reads it as a move. A mapped-drive respelling (`mappedDrive`) has a directory of its own too, so
+ * an older build never runs it as a D1c conversion.
  *
  * - `prepared`: nothing outside the journal changed yet; a failed profile rewrite drops the record.
  * - `profile-rewritten`: the profile names the drive paths; the other stores only go forward.
  */
 import { isRecord } from '../../../shared/orcad-migration/orcad-migration-manifest-fields'
+import type { WslMappedDrive } from '../../../shared/wsl-move/wsl-drive-unc-respelling'
 import { createMigrationJournalDirectory } from '../../persistence/migrating-orcad-catalog/cutover-journals/migration-journal-directory'
 
 export const WSL_DRIVE_UNC_CONVERSION_PHASES = ['prepared', 'profile-rewritten'] as const
@@ -19,9 +21,14 @@ export type WslDriveUncConversion = {
   /** The profile the conversion rewrites; null in a journal written before it was recorded. */
   profileId: string | null
   distro: string
+  /** Set for a mapped drive respelled to its share path; absent for D1c. */
+  mappedDrive?: WslMappedDrive
   repoIds: string[]
   folderWorkspaceIds: string[]
-  /** The converting projects' folders, as UNC paths, for a spawn that names no workspace. */
+  /**
+   * The converting projects' folders as saved (UNC, or on the mapped drive), for a spawn that
+   * names no workspace.
+   */
   rootPaths: string[]
   phase: WslDriveUncConversionPhase
   /** Old → new worktree ids, from the profile rewrite; empty before it. */
@@ -49,20 +56,32 @@ export function onWslDriveUncConversionJournalChange(
   return () => changeListeners.delete(listener)
 }
 
-const journals = createMigrationJournalDirectory({
-  directoryName: 'wsl-drive-unc-conversions',
+const journalOptions = {
   maxFileBytes: 4 * 1024 * 1024,
-  parse: parseWslDriveUncConversion,
-  unreadable: (detail) => new WslDriveUncConversionJournalUnreadableError(detail),
-  onChange: (userDataPath) => {
+  unreadable: (detail: string) => new WslDriveUncConversionJournalUnreadableError(detail),
+  onChange: (userDataPath: string) => {
     for (const listener of changeListeners) {
       listener(userDataPath)
     }
   }
+}
+
+const journals = createMigrationJournalDirectory({
+  ...journalOptions,
+  directoryName: 'wsl-drive-unc-conversions',
+  parse: (value) => withoutMappedDrive(parseWslDriveUncConversion(value))
+})
+
+const mappedDriveJournals = createMigrationJournalDirectory({
+  ...journalOptions,
+  directoryName: 'wsl-mapped-drive-conversions',
+  parse: (value) => withMappedDrive(parseWslDriveUncConversion(value))
 })
 
 export function listWslDriveUncConversions(userDataPath: string): WslDriveUncConversion[] {
-  return journals.list(userDataPath).map((record) => structuredClone(record))
+  return [...journals.list(userDataPath), ...mappedDriveJournals.list(userDataPath)].map((record) =>
+    structuredClone(record)
+  )
 }
 
 /** A profile's conversions; one journaled before profiles were recorded counts for every profile. */
@@ -79,11 +98,26 @@ export function writeWslDriveUncConversion(
   userDataPath: string,
   record: WslDriveUncConversion
 ): void {
-  journals.write(userDataPath, record)
+  ;(record.mappedDrive ? mappedDriveJournals : journals).write(userDataPath, record)
 }
 
 export function removeWslDriveUncConversion(userDataPath: string, migrationId: string): void {
   journals.remove(userDataPath, migrationId)
+  mappedDriveJournals.remove(userDataPath, migrationId)
+}
+
+function withoutMappedDrive(record: WslDriveUncConversion): WslDriveUncConversion {
+  if (record.mappedDrive) {
+    throw new Error('wsl_drive_unc_conversion_mapped_drive_misplaced')
+  }
+  return record
+}
+
+function withMappedDrive(record: WslDriveUncConversion): WslDriveUncConversion {
+  if (!record.mappedDrive) {
+    throw new Error('wsl_drive_unc_conversion_mapped_drive_missing')
+  }
+  return record
 }
 
 function parseWslDriveUncConversion(value: unknown): WslDriveUncConversion {
@@ -111,6 +145,9 @@ function parseWslDriveUncConversion(value: unknown): WslDriveUncConversion {
     migrationId: value.migrationId,
     profileId: isText(value.profileId) ? value.profileId : null,
     distro: value.distro,
+    ...(isMappedDrive(value.mappedDrive)
+      ? { mappedDrive: { letter: value.mappedDrive.letter, share: value.mappedDrive.share } }
+      : {}),
     repoIds: [...value.repoIds],
     folderWorkspaceIds: [...value.folderWorkspaceIds],
     rootPaths: [...value.rootPaths],
@@ -120,6 +157,15 @@ function parseWslDriveUncConversion(value: unknown): WslDriveUncConversion {
     createdAt: value.createdAt,
     updatedAt: value.updatedAt
   }
+}
+
+function isMappedDrive(value: unknown): value is WslMappedDrive {
+  return (
+    isRecord(value) &&
+    typeof value.letter === 'string' &&
+    /^[A-Za-z]$/.test(value.letter) &&
+    isText(value.share)
+  )
 }
 
 function isText(value: unknown): value is string {

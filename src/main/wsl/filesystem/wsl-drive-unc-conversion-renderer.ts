@@ -35,6 +35,7 @@ export function listPendingWslDriveUncRendererRewrites(
     .map((record) => ({
       migrationId: record.migrationId,
       distro: record.distro,
+      ...(record.mappedDrive ? { mappedDrive: record.mappedDrive } : {}),
       worktreeIds: record.worktreeIds,
       rootPaths: record.rootPaths,
       storeIds: RENDERER_STORE_IDS.filter((id) => !record.rewrittenStores.includes(id))

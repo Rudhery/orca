@@ -2,17 +2,21 @@ import React from 'react'
 import { useTranslate } from '@/i18n/use-translate'
 import { Button } from '@/components/ui/button'
 import { SettingsRow } from '../settings/form-controls/SettingsFormControls'
-import { openWslMoveDialogFor } from './wsl-move-entry'
+import type { WslMoveTarget } from './wsl-move-entry'
+import { openWslMoveForProject } from './wsl-mapped-drive-move-store'
 
 /** The project runtime setting of a WSL project whose distro has a host: a move, not a toggle. */
 export function WslMoveRuntimeRow({
-  distro,
-  repoId
+  target,
+  repoId,
+  name
 }: {
-  distro: string
+  target: WslMoveTarget
   repoId: string
+  name: string
 }): React.JSX.Element {
   const t = useTranslate()
+  const { distro } = target
   return (
     <SettingsRow
       label={t('wslMove.runtime.label', 'Project runtime')}
@@ -26,7 +30,7 @@ export function WslMoveRuntimeRow({
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => openWslMoveDialogFor(distro, { kind: 'repo', id: repoId })}
+          onClick={() => openWslMoveForProject(target, { kind: 'repo', id: repoId }, name)}
         >
           {t('wslMove.runtime.move', 'Move project')}
         </Button>

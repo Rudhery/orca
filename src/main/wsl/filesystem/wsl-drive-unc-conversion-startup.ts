@@ -30,6 +30,7 @@ import { orchestrationDbFile } from '../../runtime/orchestration/db/orchestratio
 import { journalDomainDatabasePath } from '../../native-chat/agent-session-journal/database/journal-domain-database'
 import { rewriteWslDriveUncState } from './wsl-drive-unc-state-rewrite'
 import { WSL_DRIVE_UNC_STATE_DISPOSITIONS } from '../../../shared/wsl-move/wsl-drive-unc-state-dispositions'
+import type { WslMappedDriveMoveDue } from '../../../shared/wsl-move/wsl-drive-unc-conversion-types'
 
 export type WslDriveUncConversionStartupDeps = {
   /** Where the journal lives. */
@@ -42,7 +43,15 @@ export type WslDriveUncConversionStartupDeps = {
 }
 
 export type WslDriveUncConversionOutcome =
-  | { migrationId: string; outcome: 'converted'; repoIds: string[]; folderWorkspaceIds: string[] }
+  | {
+      migrationId: string
+      outcome: 'converted'
+      repoIds: string[]
+      folderWorkspaceIds: string[]
+      distro?: string
+      /** Set for a mapped-drive respelling, whose projects the WSL move takes next. */
+      mappedDrive?: boolean
+    }
   /** The profile could not be rewritten; nothing changed, and the panes stay asleep. */
   | { migrationId: string; outcome: 'rolled-back'; detail: string }
   /** The profile is converted; `store` failed and retries at the next startup. */
@@ -100,7 +109,9 @@ async function runOne(
     migrationId,
     outcome: 'converted',
     repoIds: record.repoIds,
-    folderWorkspaceIds: record.folderWorkspaceIds
+    folderWorkspaceIds: record.folderWorkspaceIds,
+    distro: record.distro,
+    ...(record.mappedDrive ? { mappedDrive: true } : {})
   }
 }
 
@@ -172,8 +183,35 @@ export function lastWslDriveUncConversionOutcomes(): WslDriveUncConversionOutcom
   return [...lastOutcomes]
 }
 
+let movesTaken = false
+
+/** Once per run: a window reload must not open the move again. */
+export function takeWslMappedDriveMovesDue(): WslMappedDriveMoveDue[] {
+  if (movesTaken) {
+    return []
+  }
+  movesTaken = true
+  return wslMappedDriveMovesDueOf(lastOutcomes)
+}
+
+export function wslMappedDriveMovesDueOf(
+  outcomes: readonly WslDriveUncConversionOutcome[]
+): WslMappedDriveMoveDue[] {
+  return outcomes.flatMap((outcome) =>
+    outcome.outcome === 'converted' && outcome.mappedDrive && outcome.distro
+      ? [
+          {
+            distro: outcome.distro,
+            repoIds: outcome.repoIds,
+            folderWorkspaceIds: outcome.folderWorkspaceIds
+          }
+        ]
+      : []
+  )
+}
+
 /**
- * Startup, before the profile store opens: with nothing journaled it only lists one directory.
+ * Startup, before the profile store opens: with nothing journaled it only lists its directories.
  * Never throws; a conversion it can't finish stays journaled for the next startup. Only Windows
  * starts a conversion, but the journal alone says one is due, so this runs on any platform.
  */

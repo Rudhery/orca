@@ -6,14 +6,16 @@
 import { normalizeRuntimePathForComparison } from '../file-access/cross-platform-path'
 import { LOCAL_EXECUTION_HOST_ID } from '../execution-host/execution-host'
 import type { PythonEnvironment } from '../editor/notebooks/notebook-kernel-types'
-import { wslUncDrivePathToWindows } from '../file-access/wsl-paths'
+import { wslDriveUncRespelling, type WslMappedDrive } from './wsl-drive-unc-respelling'
 
 /** A converted conversion's renderer half, as main lists it. */
 export type WslDriveUncPendingRendererRewrite = {
   migrationId: string
   distro: string
+  /** Set for a mapped drive respelled to its share path. */
+  mappedDrive?: WslMappedDrive
   worktreeIds: [string, string][]
-  /** The converted projects' folders, as UNC paths. */
+  /** The converted projects' folders, as saved before the conversion. */
   rootPaths: string[]
   /** Renderer stores still to record. */
   storeIds: string[]
@@ -21,35 +23,33 @@ export type WslDriveUncPendingRendererRewrite = {
 
 export type WslDriveUncRendererKeys = {
   worktreeId: (worktreeId: string) => string | null
-  /** A path inside a converted folder, in its drive form; null for any other path. */
+  /** A path inside a converted folder, in its converted form; null for any other path. */
   path: (path: string) => string | null
 }
 
 export function wslDriveUncRendererKeys(
-  conversion: Pick<WslDriveUncPendingRendererRewrite, 'distro' | 'worktreeIds' | 'rootPaths'>
+  conversion: Pick<
+    WslDriveUncPendingRendererRewrite,
+    'distro' | 'mappedDrive' | 'worktreeIds' | 'rootPaths'
+  >
 ): WslDriveUncRendererKeys {
   const ids = new Map(conversion.worktreeIds)
-  const { distro } = conversion
+  const respelling = wslDriveUncRespelling(conversion)
   const roots = conversion.rootPaths.flatMap((root) => {
-    const drive = wslUncDrivePathToWindows(root, distro)
-    return drive ? [normalizeRuntimePathForComparison(drive)] : []
+    const converted = respelling.path(root)
+    return converted ? [normalizeRuntimePathForComparison(converted)] : []
   })
-  const comparisonForm = /^\/\/wsl\/([^/]+)(\/[\s\S]*)?$/
   const path = (value: string): string | null => {
-    // Quick-open keeps its roots in comparison form, which folds both UNC spellings into this.
-    const folded = comparisonForm.exec(value)
-    const drive =
-      folded && folded[1] === distro.toLowerCase()
-        ? wslUncDrivePathToWindows(`//wsl.localhost/${distro}${folded[2] ?? '/'}`, distro)
-        : wslUncDrivePathToWindows(value, distro)
-    if (!drive) {
+    // Quick-open keeps its roots in comparison form, which folds both UNC spellings into one.
+    const converted = respelling.comparisonForm(value) ?? respelling.path(value)
+    if (!converted) {
       return null
     }
-    const comparable = normalizeRuntimePathForComparison(drive)
+    const comparable = normalizeRuntimePathForComparison(converted)
     const inRoot = roots.some(
       (root) => comparable === root || comparable.startsWith(root.endsWith('/') ? root : `${root}/`)
     )
-    return inRoot ? drive : null
+    return inRoot ? converted : null
   }
   return { worktreeId: (worktreeId) => ids.get(worktreeId) ?? null, path }
 }

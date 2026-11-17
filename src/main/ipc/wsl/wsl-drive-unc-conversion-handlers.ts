@@ -1,5 +1,6 @@
 /**
- * IPC for converting UNC Windows-drive projects to their drive paths (D1c), and what the last
+ * IPC for converting UNC Windows-drive projects to their drive paths (D1c) or mapped-drive projects
+ * to their distro share, and what the last
  * startup did with a journaled conversion. Refused off Windows and while the internal WSL hosts
  * gate is closed, before anything is read.
  */
@@ -7,7 +8,8 @@ import { randomUUID } from 'node:crypto'
 import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import type {
   WslDriveUncConversionRequest,
-  WslDriveUncConversionResult
+  WslDriveUncConversionResult,
+  WslMappedDriveMoveDue
 } from '../../../shared/wsl-move/wsl-drive-unc-conversion-types'
 import { relaunchApp } from '../../startup/quit/app-relaunch'
 import { gitExecFileAsync } from '../../git/command-runner/git-exec-file'
@@ -21,8 +23,10 @@ import { quitProcess } from '../../startup/quit/process-quit-request'
 import { startWslDriveUncConversion } from '../../wsl/filesystem/wsl-drive-unc-conversion-run'
 import {
   lastWslDriveUncConversionOutcomes,
+  takeWslMappedDriveMovesDue,
   type WslDriveUncConversionOutcome
 } from '../../wsl/filesystem/wsl-drive-unc-conversion-startup'
+import { resolveWslMappedDrivePath } from '../../wsl/filesystem/wsl-mapped-drive-share'
 import { wslHostsGateOpen, wslHostsOptedIn } from '../../wsl/host-lifecycle/wsl-host-gate'
 import { createWslMoveDriverDeps } from './wsl-move-driver-wiring'
 import { getTrustedUIRendererWebContents } from '../ui'
@@ -39,6 +43,7 @@ import { readWslDistroDriveMounts } from '../../wsl/filesystem/wsl-drive-unc-mou
 export const WSL_DRIVE_UNC_CONVERSION_CHANNELS = [
   'wslDriveUnc:convert',
   'wslDriveUnc:lastOutcomes',
+  'wslDriveUnc:takeMappedDriveMovesDue',
   'wslDriveUnc:listPendingRendererRewrites',
   'wslDriveUnc:recordStoreRewritten'
 ] as const
@@ -65,6 +70,7 @@ export function registerWslDriveUncConversionHandlers(
           userDataPath,
           profileId: activeProfileId,
           readDriveMounts: readWslDistroDriveMounts,
+          readMappedDriveShare: (letter) => resolveWslMappedDrivePath(`${letter}:\\`),
           readProfileState: async () => {
             await store.flushPendingOrThrowAsync()
             return readProfileProjectTransferState(activeProfileId, getProfileUserDataPath()).state
@@ -95,6 +101,13 @@ export function registerWslDriveUncConversionHandlers(
   // The rest follow the journal, which only Windows writes, so they answer on any platform.
   ipcMain.handle('wslDriveUnc:lastOutcomes', (): WslDriveUncConversionOutcome[] =>
     wslHostsGateOpen() ? lastWslDriveUncConversionOutcomes() : []
+  )
+  ipcMain.handle(
+    'wslDriveUnc:takeMappedDriveMovesDue',
+    (event: IpcMainInvokeEvent): WslMappedDriveMoveDue[] =>
+      wslHostsGateOpen() && getTrustedUIRendererWebContents()?.id === event.sender.id
+        ? takeWslMappedDriveMovesDue()
+        : []
   )
   ipcMain.handle(
     'wslDriveUnc:listPendingRendererRewrites',
@@ -135,15 +148,20 @@ function parseRequest(value: unknown): WslDriveUncConversionRequest {
   const distro = 'distro' in record ? record.distro : undefined
   const repoIds = 'repoIds' in record ? record.repoIds : undefined
   const folderWorkspaceIds = 'folderWorkspaceIds' in record ? record.folderWorkspaceIds : []
+  const mappedDriveLetter = 'mappedDriveLetter' in record ? record.mappedDriveLetter : undefined
   if (
     typeof distro !== 'string' ||
     !distro ||
     !isIdList(repoIds) ||
-    !isIdList(folderWorkspaceIds)
+    !isIdList(folderWorkspaceIds) ||
+    (mappedDriveLetter !== undefined &&
+      (typeof mappedDriveLetter !== 'string' || !/^[A-Za-z]$/.test(mappedDriveLetter)))
   ) {
     throw new Error('wsl_drive_unc_invalid_args')
   }
-  return { distro, repoIds, folderWorkspaceIds }
+  return mappedDriveLetter === undefined
+    ? { distro, repoIds, folderWorkspaceIds }
+    : { distro, repoIds, folderWorkspaceIds, mappedDriveLetter }
 }
 
 function isIdList(value: unknown): value is string[] {
