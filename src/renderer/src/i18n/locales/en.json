@@ -24742,7 +24742,8 @@
       "review": "Back to projects",
       "browserLoginsHostUnknown": "Browser logins were not copied, because Orca could not identify the host’s browser profile. Sign in again in the host’s browser tabs.",
       "browserLoginsConflict": "Browser logins were not copied, because the host’s browser profile is already in use. Sign in again in the host’s browser tabs.",
-      "browserLoginsNotCopied": "Browser logins were not copied to the host. Sign in again in the host’s browser tabs."
+      "browserLoginsNotCopied": "Browser logins were not copied to the host. Sign in again in the host’s browser tabs.",
+      "droppedForMappedDrives": "Not moved, because their drive letter no longer points into {{distro}}: {{names}}. Check the drive, then move them again."
     },
     "runtime": {
       "label": "Project runtime",

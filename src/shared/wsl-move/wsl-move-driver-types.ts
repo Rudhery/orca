@@ -20,6 +20,9 @@ export type WslMoveRequest = {
 
 export type WslMoveRowRef = { kind: 'repo' | 'folder'; id: string }
 
+/** A project a whole-distro start left, because its drive letter now points elsewhere. */
+export type WslMoveDroppedProject = WslMoveRowRef & { name: string }
+
 export type WslMoveBlockerKind =
   | 'agent-working'
   | 'process-running'
@@ -122,6 +125,8 @@ export type WslMoveResult =
       automationsPending?: string[]
       /** Set by the browser-login copy when the host's browser starts signed out. */
       browserLoginsNotCopiedReason?: string
+      /** Previewed projects this start left: their drive letter points elsewhere now. */
+      droppedForMappedDrives?: WslMoveDroppedProject[]
     }
   | WslMoveRefusal
   | {

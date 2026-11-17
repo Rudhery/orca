@@ -3,10 +3,10 @@ import {
   classifyWslMappedDrive,
   clearWslMappedDriveShareCacheForTests,
   readWslMappedDriveShareNow,
-  wslMappedDriveLastKnownShare,
   resolveWslMappedDrivePath,
   type WslMappedDriveShareDeps
 } from './wsl-mapped-drive-share'
+import { wslMappedDriveLastKnownShare } from './wsl-mapped-drive-last-known'
 
 function deps(
   realpathRoot: WslMappedDriveShareDeps['realpathRoot'],
@@ -251,5 +251,26 @@ describe('fresh reads and last-known answers', () => {
       share: '\\\\wsl.localhost\\Ubuntu'
     })
     expect(realpathRoot).toHaveBeenCalledTimes(2)
+  })
+
+  it('falls back to a stale WSL answer when re-classifying times out, so the fresh read decides', async () => {
+    let now = 0
+    await readWslMappedDriveShareNow(
+      'W',
+      deps(async () => '\\\\wsl.localhost\\Ubuntu\\', { now: () => now })
+    )
+    now = 120_000
+    const hung = deps(() => new Promise<string>(() => {}), { now: () => now })
+    await expect(classifyWslMappedDrive('W', hung)).resolves.toEqual({
+      share: '\\\\wsl.localhost\\Ubuntu'
+    })
+  })
+
+  it('treats an answer dated after now as unknown', async () => {
+    await readWslMappedDriveShareNow(
+      'F',
+      deps(async () => 'F:\\', { now: () => Date.now() + 60_000 })
+    )
+    expect(wslMappedDriveLastKnownShare('F')).toBeNull()
   })
 })

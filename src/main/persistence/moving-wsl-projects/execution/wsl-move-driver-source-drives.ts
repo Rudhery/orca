@@ -5,6 +5,7 @@
  */
 import {
   WSL_MOVE_MAPPED_DRIVE_UNVERIFIABLE_DETAIL,
+  type WslMoveDroppedProject,
   type WslMoveRefusal,
   type WslMoveRequest
 } from '../../../../shared/wsl-move/wsl-move-driver-types'
@@ -14,8 +15,10 @@ import {
 } from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
 import {
   readWslMoveMappedDrives,
+  wslMoveDriveLetterOf,
   wslMoveDriveLettersInUse
 } from '../manifest-scope/wsl-move-mapped-drives'
+import { isLocalWslMoveRow } from '../quiescence/wsl-move-scope-guard'
 import type { WslMoveScopeDrives, WslMoveScopeRefusal } from '../manifest-scope/wsl-move-scope'
 import { findWindowsGitRefusals } from '../manifest-scope/wsl-move-windows-git-worktrees'
 import type { WslMoveCatalogRows, WslMoveDriverDeps } from './wsl-move-driver-ports'
@@ -109,4 +112,41 @@ export function wslMoveStartDriveRefusal(
   return sameWslMappedDrives(only(expected), only(drives.mappedDrives))
     ? null
     : { outcome: 'refused', code: 'wsl_move_scope_changed', detail: 'mapped-drives-changed' }
+}
+
+/**
+ * A whole-distro start's projects that the preview could show but this start leaves, because
+ * their drive now points elsewhere (or no longer answers): named in the result, never silent.
+ */
+export function wslMoveDroppedForDrives(
+  catalog: WslMoveCatalogRows,
+  fresh: readonly WslMappedDrive[],
+  expected: readonly WslMappedDrive[],
+  moving: { repoIds: readonly string[]; folderWorkspaceIds: readonly string[] }
+): WslMoveDroppedProject[] {
+  const changed = new Set(
+    expected
+      .filter((seen) => {
+        const now = fresh.find((drive) => drive.letter === seen.letter)
+        return !now || !sameWslMappedDrives([seen], [now])
+      })
+      .map((drive) => drive.letter.toUpperCase())
+  )
+  const onChanged = (row: { path: string; orcadRetained?: unknown }): boolean =>
+    // A retained row was moved earlier; it isn't this start's to leave.
+    !row.orcadRetained && changed.has(wslMoveDriveLetterOf(row.path) ?? '')
+  return [
+    ...catalog.repos
+      .filter((repo) => isLocalWslMoveRow(repo) && !moving.repoIds.includes(repo.id))
+      .filter((repo) => onChanged(repo))
+      .map((repo) => ({ kind: 'repo' as const, id: repo.id, name: repo.displayName })),
+    ...catalog.folderWorkspaces
+      .filter(
+        (folder) => isLocalWslMoveRow(folder) && !moving.folderWorkspaceIds.includes(folder.id)
+      )
+      .filter((folder) =>
+        onChanged({ path: folder.folderPath, orcadRetained: folder.orcadRetained })
+      )
+      .map((folder) => ({ kind: 'folder' as const, id: folder.id, name: folder.name }))
+  ]
 }

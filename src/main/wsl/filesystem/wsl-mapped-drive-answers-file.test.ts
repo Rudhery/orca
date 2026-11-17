@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import type * as NodeFs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -22,10 +30,11 @@ import {
   wslMappedDriveAnswersPath
 } from './wsl-mapped-drive-answers-file'
 import {
+  classifyWslMappedDrive,
   clearWslMappedDriveShareCacheForTests,
-  readWslMappedDriveShareNow,
-  wslMappedDriveLastKnownShare
+  readWslMappedDriveShareNow
 } from './wsl-mapped-drive-share'
+import { wslMappedDriveLastKnownShare } from './wsl-mapped-drive-last-known'
 
 let userDataPath: string
 beforeEach(() => {
@@ -98,6 +107,78 @@ describe('saved mapped-drive answers', () => {
     }
     expect(isWslMoveProjectBlocked(store, { repoId: 'c' })).toBe(false)
     expect(isWslMoveProjectBlocked(store, { repoId: 'w' })).toBe(true)
-    expect(realpathNative).not.toHaveBeenCalled()
+    // C: is known from the file, so only the unknown W: is looked up.
+    expect(realpathNative.mock.calls.map(([root]) => root)).toEqual(['W:\\'])
+  })
+
+  it('keep a WSL answer through a failed lookup and a restart, and report it unverifiable', async () => {
+    const answers = restart()
+    await readWslMappedDriveShareNow('W', fake('\\\\wsl.localhost\\Ubuntu\\'))
+    await answers.saved()
+    const failing = {
+      ...fake(''),
+      realpathRoot: async (): Promise<string> => {
+        throw new Error('ENOENT')
+      }
+    }
+    // The mover sees a WSL drive that fails to answer as unverifiable, not as mapping nowhere.
+    await expect(readWslMappedDriveShareNow('W', failing)).resolves.toBe('unverifiable')
+    await expect(classifyWslMappedDrive('W', { ...failing, now: () => 120_000 })).resolves.toEqual({
+      share: '\\\\wsl.localhost\\Ubuntu'
+    })
+    await answers.saved()
+    restart()
+    expect(wslMappedDriveLastKnownShare('W')).toEqual({ share: '\\\\wsl.localhost\\Ubuntu' })
+    writeUnreadableJournal()
+    loadWslMoveFence(userDataPath)
+    expect(isWslMoveProjectBlocked(storeOf({ w: 'W:\\home\\me\\app' }), { repoId: 'w' })).toBe(true)
+  })
+
+  it('classify unknown letters once for an unreadable journal, never a saved WSL one', async () => {
+    const answers = restart()
+    await readWslMappedDriveShareNow('W', fake('\\\\wsl.localhost\\Ubuntu\\'))
+    await answers.saved()
+    restart()
+    realpathNative.mockImplementation((root: string, done: (e: null, real: string) => void) =>
+      done(null, root)
+    )
+    writeUnreadableJournal()
+    loadWslMoveFence(userDataPath)
+    const store = storeOf({ c: 'C:\\src\\site', w: 'W:\\home\\me\\app' })
+    expect(isWslMoveProjectBlocked(store, { repoId: 'c' })).toBe(true)
+    expect(isWslMoveProjectBlocked(store, { repoId: 'w' })).toBe(true)
+    await vi.waitFor(() => expect(isWslMoveProjectBlocked(store, { repoId: 'c' })).toBe(false))
+    expect(realpathNative.mock.calls.map(([root]) => root)).toEqual(['C:\\'])
+    expect(isWslMoveProjectBlocked(store, { repoId: 'w' })).toBe(true)
+  })
+
+  it('skip the write when only an answer’s time changed, and clear stale temporaries', async () => {
+    const stale = `${wslMappedDriveAnswersPath(userDataPath)}.999999.1.abc.tmp`
+    writeFileSync(stale, 'x')
+    utimesSync(stale, 0, 0)
+    const answers = restart()
+    await answers.saved()
+    expect(existsSync(stale)).toBe(false)
+    await readWslMappedDriveShareNow('C', fake('C:\\'))
+    await answers.saved()
+    expect(existsSync(wslMappedDriveAnswersPath(userDataPath))).toBe(true)
+    rmSync(wslMappedDriveAnswersPath(userDataPath))
+    await readWslMappedDriveShareNow('C', { ...fake('C:\\'), now: () => 2_000 })
+    await answers.saved()
+    expect(existsSync(wslMappedDriveAnswersPath(userDataPath))).toBe(false)
   })
 })
+
+function writeUnreadableJournal(): void {
+  mkdirSync(wslMoveJournalDirectory(userDataPath), { recursive: true })
+  writeFileSync(
+    join(wslMoveJournalDirectory(userDataPath), 'move-1.json'),
+    JSON.stringify({ ...cutover('move-1', 'destination-committed'), version: 3 })
+  )
+}
+
+function storeOf(paths: Record<string, string>): {
+  getRepo: (id: string) => { path: string } | undefined
+} {
+  return { getRepo: (id) => (id in paths ? { path: paths[id] } : undefined) }
+}

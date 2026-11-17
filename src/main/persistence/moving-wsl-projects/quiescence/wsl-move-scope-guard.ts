@@ -2,7 +2,10 @@
 import { resolve } from 'node:path'
 import { getRepoIdFromWorktreeId } from '../../../../shared/worktree/id'
 import { parseWorkspaceKey } from '../../../../shared/workspace/identity/workspace-scope'
-import { mayBeInWsl } from './wsl-move-unread-journal-folders'
+import {
+  mayBeInWsl,
+  resetUnreadJournalClassificationForTests
+} from './wsl-move-unread-journal-folders'
 import {
   getRepoExecutionHostId,
   LOCAL_EXECUTION_HOST_ID
@@ -70,6 +73,7 @@ export function isWslMoveFenceLoaded(): boolean {
 }
 
 export function resetWslMoveFenceForTests(): void {
+  resetUnreadJournalClassificationForTests()
   stopFollowing?.()
   stopFollowing = null
   loaded = null

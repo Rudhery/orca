@@ -158,11 +158,13 @@ async function runMove(
             detail: pauseDetail(quiesced.reason, quiesced.detail)
           })
     }
-    try {
-      return await moveQuiesced(deps, host, quiesced.cutover, prepared, running, slept)
-    } catch (error) {
-      return await putBack(deps, host, migrationId, describe(error))
-    }
+    const result = await moveQuiesced(deps, host, quiesced.cutover, prepared, running, slept).catch(
+      (error: unknown) => putBack(deps, host, migrationId, describe(error))
+    )
+    // The projects the preview showed that this start left say why in the result.
+    return result.outcome === 'moved' && prepared.droppedForDrives
+      ? { ...result, droppedForMappedDrives: prepared.droppedForDrives }
+      : result
   } finally {
     slept.dispose()
   }

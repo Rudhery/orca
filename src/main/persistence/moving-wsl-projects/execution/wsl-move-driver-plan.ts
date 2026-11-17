@@ -5,6 +5,7 @@
  */
 import {
   WSL_MOVE_FINISH_PENDING_DETAIL,
+  type WslMoveDroppedProject,
   type WslMoveRefusal,
   type WslMoveRequest
 } from '../../../../shared/wsl-move/wsl-move-driver-types'
@@ -17,6 +18,7 @@ import type { WslMappedDrive } from '../../../../shared/wsl-move/wsl-mapped-driv
 import {
   journaledWslMoveDrives,
   readWslMoveSourceDrives,
+  wslMoveDroppedForDrives,
   wslMoveStartDriveRefusal
 } from './wsl-move-driver-source-drives'
 import { listWslMoveCutoverChain } from '../cutover-recovery/wsl-move-cutover-journal'
@@ -50,6 +52,8 @@ export type WslMovePrepared = {
   exported: WslMoveManifestExport
   scope: WslMoveTerminalScope
   blockers: WslMoveGateBlocker[]
+  /** A whole-distro start's previewed projects left because their drive now points elsewhere. */
+  droppedForDrives?: WslMoveDroppedProject[]
 }
 
 export function refusal(
@@ -298,6 +302,9 @@ export async function prepareWslMove(
   if (changedDrives) {
     return changedDrives
   }
+  const droppedForDrives = expectedMappedDrives
+    ? wslMoveDroppedForDrives(catalog, drives.mappedDrives, expectedMappedDrives, plan)
+    : []
   const scope: WslMoveTerminalScope = {
     workspaceIds: exported.workspaceIds,
     workspaceKeys: new Set(exported.workspaceKeys)
@@ -308,6 +315,7 @@ export async function prepareWslMove(
     plan,
     exported,
     scope,
-    blockers: gate.verdict === 'blocked' ? gate.blockers : []
+    blockers: gate.verdict === 'blocked' ? gate.blockers : [],
+    ...(droppedForDrives.length > 0 ? { droppedForDrives } : {})
   }
 }

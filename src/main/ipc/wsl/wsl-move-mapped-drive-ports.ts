@@ -7,9 +7,9 @@ import type { WslMappedDrive } from '../../../shared/wsl-move/wsl-mapped-drive-p
 import {
   classifyWslMappedDrive,
   readWslMappedDriveShareNow,
-  wslMappedDriveLastKnownShare,
   wslMappedDriveMatches
 } from '../../wsl/filesystem/wsl-mapped-drive-share'
+import { wslMappedDriveLastKnownShare } from '../../wsl/filesystem/wsl-mapped-drive-last-known'
 
 export function wslMoveMappedDrivePorts(): Pick<
   WslMoveDriverDeps,

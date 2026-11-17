@@ -7,12 +7,17 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { readNodeFileSyncWithinLimit } from '../../../shared/file-content/node-bounded-file-reader'
 import { parseWslUncPath } from '../../../shared/file-access/wsl-paths'
-import { durableWriteTempPath, writeFileDurable } from '../../filesystem/durable-file-write'
+import {
+  durableWriteTempPath,
+  removeStaleDurableWriteTempFiles,
+  writeFileDurable
+} from '../../filesystem/durable-file-write'
 import {
   seedWslMappedDriveAnswers,
   setWslMappedDriveAnswerSink,
+  wslMappedDriveAnswers,
   type WslMappedDriveAnswer
-} from './wsl-mapped-drive-share'
+} from './wsl-mapped-drive-last-known'
 
 const FILE_NAME = 'wsl-mapped-drive-answers.json'
 const MAX_FILE_BYTES = 64 * 1024
@@ -34,6 +39,14 @@ const AnswersSchema = z.object({
     .max(26)
 })
 
+function sharesOf(answers: readonly WslMappedDriveAnswer[]): string {
+  return JSON.stringify(
+    [...answers]
+      .sort((left, right) => left.letter.localeCompare(right.letter))
+      .map(({ letter, share }) => [letter, share])
+  )
+}
+
 export function wslMappedDriveAnswersPath(userDataPath: string): string {
   return join(userDataPath, FILE_NAME)
 }
@@ -53,9 +66,19 @@ export function loadWslMappedDriveAnswers(userDataPath: string): { saved: () => 
   } catch {
     // No answers saved yet, or unreadable: unknown letters stay unknown.
   }
-  let writing: Promise<void> = Promise.resolve()
+  // A write that died before its rename leaves a temporary; another instance's is spared.
+  let writing: Promise<void> = removeStaleDurableWriteTempFiles(path, {
+    minimumAgeMs: 60_000
+  }).catch(() => {})
   let pending: WslMappedDriveAnswer[] | null = null
+  let savedShares = sharesOf(wslMappedDriveAnswers())
   setWslMappedDriveAnswerSink((answers) => {
+    // Only where letters point counts: a re-read that changed only the time isn't worth a write.
+    const shares = sharesOf(answers)
+    if (shares === savedShares) {
+      return
+    }
+    savedShares = shares
     // Writes run one at a time; a burst of answers saves only the newest set.
     const queued = pending !== null
     pending = answers
