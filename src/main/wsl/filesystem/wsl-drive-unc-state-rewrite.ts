@@ -79,12 +79,12 @@ export function rewriteWslDriveUncState(
       rewriter
     )
   }
-  if (!scope.mappedDrive) {
-    next.projects = sameIfUnchanged(
-      next.projects,
-      withWindowsGit(next.projects, repoIds, scope.distro)
-    )
-  }
+  next.projects = sameIfUnchanged(
+    next.projects,
+    scope.mappedDrive
+      ? withPinnedRuntime(next.projects, repoIds)
+      : withWindowsGit(next.projects, repoIds, scope.distro)
+  )
   next.projectGroups = sameIfUnchanged(
     next.projectGroups,
     withConvertedGroupFolders(next, repoIds, folderWorkspaceIds, respelling)
@@ -250,6 +250,19 @@ function windowsGitPreference(
     return current.git === 'windows-host' ? null : { ...current, git: 'windows-host' }
   }
   return { kind: 'wsl', distro, git: 'windows-host' }
+}
+
+/**
+ * A project with no saved runtime infers WSL from a share path, so respelling alone would move its
+ * terminals and Git from the global default into the distro, even if the move is then cancelled.
+ */
+function withPinnedRuntime(projects: Project[], repoIds: ReadonlySet<string>): Project[] {
+  return projects.map((project) =>
+    project.localWindowsRuntimePreference === undefined &&
+    project.sourceRepoIds.some((id) => repoIds.has(id))
+      ? { ...project, localWindowsRuntimePreference: { kind: 'inherit-global' } }
+      : project
+  )
 }
 
 /** A group whose projects all convert was made from their parent folder, which converts too. */

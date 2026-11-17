@@ -56,8 +56,8 @@ export type WslMoveDialogState =
 
 export type WslMoveOpenRequest = {
   distro: string
-  /** Opened from one project: only it starts checked. Otherwise every project does. */
-  only?: WslMoveRowRef
+  /** Opened from some projects: only they start checked. Otherwise every project does. */
+  only?: WslMoveRowRef | readonly WslMoveRowRef[]
   /** Fallback list when main refuses the whole-distro preview. */
   catalogCandidates?: () => WslMoveCandidates
 }
@@ -174,9 +174,11 @@ export async function openWslMoveDialog(request: WslMoveOpenRequest): Promise<vo
     candidates = request.catalogCandidates()
   }
   const all = refsOf(candidates)
-  const only = request.only
-  // Opened from one project that cannot move: check nothing; "Not moving" says why.
-  const selected = only ? all.filter((ref) => ref.kind === only.kind && ref.id === only.id) : all
+  const only = request.only === undefined ? undefined : [request.only].flat()
+  // Opened from projects that cannot move: check nothing; "Not moving" says why.
+  const selected = only
+    ? all.filter((ref) => only.some((wanted) => ref.kind === wanted.kind && ref.id === wanted.id))
+    : all
   const wholeDistro = selected.length === all.length && distroPreview.outcome === 'ready'
   setDialog({
     stage: 'preview',

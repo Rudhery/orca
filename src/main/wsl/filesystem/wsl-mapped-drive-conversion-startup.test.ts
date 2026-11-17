@@ -20,6 +20,7 @@ import {
   runWslDriveUncConversionsAtStartup,
   wslMappedDriveMovesDueOf
 } from './wsl-drive-unc-conversion-startup'
+import type { WslMappedDriveRead } from './wsl-mapped-drive-share'
 
 const PROFILE = 'profile-1'
 const SHARE = String.raw`\\wsl.localhost\Ubuntu`
@@ -67,8 +68,7 @@ function profileState(): PersistedState {
       badgeColor: '',
       sourceRepoIds: ['repo-a'],
       createdAt: 0,
-      updatedAt: 0,
-      localWindowsRuntimePreference: { kind: 'windows-host' }
+      updatedAt: 0
     }
   ]
   state.worktreeMeta = {
@@ -151,12 +151,14 @@ function journal(overrides: Partial<WslDriveUncConversion> = {}): void {
   })
 }
 
-function run() {
+function run(read: WslMappedDriveRead = { share: SHARE }) {
   return runWslDriveUncConversionsAtStartup({
     userDataPath: root,
     profileUserDataPath: root,
     profileId: PROFILE,
-    stores: []
+    stores: [],
+    now: () => new Date('2026-11-16T00:00:05.000Z'),
+    readMappedDriveShare: async () => read
   })
 }
 
@@ -172,7 +174,8 @@ describe('a mapped-drive conversion at startup', () => {
         repoIds: ['repo-a'],
         folderWorkspaceIds: ['notes'],
         distro: 'Ubuntu',
-        mappedDrive: true
+        mappedDrive: true,
+        respelledThisRun: true
       }
     ])
     const state = readProfileProjectTransferState(PROFILE, root).state
@@ -192,11 +195,37 @@ describe('a mapped-drive conversion at startup', () => {
       ptyId: `${NEW_ID}@@s1`,
       worktreeId: NEW_ID
     })
-    // Only D1c switches to Git for Windows; a respelled project keeps what it ran.
-    expect(state.projects[0].localWindowsRuntimePreference).toEqual({ kind: 'windows-host' })
+    // With nothing saved it ran the global default; the share path alone would now infer WSL.
+    expect(state.projects[0].localWindowsRuntimePreference).toEqual({ kind: 'inherit-global' })
     expect(wslMappedDriveMovesDueOf(outcomes)).toEqual([
       { distro: 'Ubuntu', repoIds: ['repo-a'], folderWorkspaceIds: ['notes'] }
     ])
+  })
+
+  it('reports the move due only on the run that rewrote the profile', async () => {
+    seedProfile(profileState())
+    // The window's stores never recorded themselves, so the journal outlives the first run.
+    journal()
+    expect(wslMappedDriveMovesDueOf(await run())).toHaveLength(1)
+    expect(listWslDriveUncConversions(root)).toHaveLength(1)
+    expect(wslMappedDriveMovesDueOf(await run())).toEqual([])
+  })
+
+  it.each([
+    ['the drive now maps elsewhere', { share: String.raw`\\wsl.localhost\Debian` }, {}],
+    ['Windows cannot say where it maps', 'unverifiable' as const, {}],
+    [
+      'the plan is left over from long ago',
+      { share: SHARE },
+      { createdAt: '2026-11-01T00:00:00.000Z' }
+    ]
+  ])('rolls back, changing nothing, when %s', async (_why, read, overrides) => {
+    seedProfile(profileState())
+    journal(overrides)
+    const [outcome] = await run(read)
+    expect(outcome).toMatchObject({ migrationId: 'conv-1', outcome: 'rolled-back' })
+    expect(readProfileProjectTransferState(PROFILE, root).state.repos[0].path).toBe(MAPPED)
+    expect(listWslDriveUncConversions(root)).toEqual([])
   })
 
   it('keeps its journal apart from D1c so an older build never runs it as one', () => {

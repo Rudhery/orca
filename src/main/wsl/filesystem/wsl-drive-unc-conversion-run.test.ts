@@ -49,7 +49,7 @@ function deps(overrides: Partial<WslDriveUncConversionRunDeps> = {}): WslDriveUn
     userDataPath: root,
     profileId: 'profile-1',
     readDriveMounts: async () => [{ mountPoint: '/mnt/c', windowsRoot: 'C:\\' }],
-    readMappedDriveShare: async () => null,
+    readMappedDriveShare: async () => ({ share: null }),
     readProfileState: async () => state(),
     pause: vi.fn(async () => ({ panes: [] })),
     runWindowsGit: vi.fn(async (args: string[]) =>
@@ -172,12 +172,17 @@ describe('startWslDriveUncConversion for a mapped drive', () => {
     return value
   }
 
-  const MAPPED_REQUEST = { distro: 'Ubuntu', repoIds: ['repo-a'], mappedDriveLetter: 'w' }
+  const MAPPED_REQUEST = {
+    distro: 'Ubuntu',
+    repoIds: ['repo-a'],
+    mappedDriveLetter: 'w',
+    mappedDriveShare: SHARE
+  }
 
   it('journals the respelling with the drive mapping read now, and never asks Windows Git', async () => {
     const run = deps({
       readProfileState: async () => mappedState(),
-      readMappedDriveShare: vi.fn(async () => SHARE)
+      readMappedDriveShare: vi.fn(async () => ({ share: SHARE }))
     })
     expect(await startWslDriveUncConversion(run, MAPPED_REQUEST)).toEqual({
       outcome: 'restarting',
@@ -198,7 +203,7 @@ describe('startWslDriveUncConversion for a mapped drive', () => {
   it('refuses when the drive no longer maps into the distro', async () => {
     const run = deps({
       readProfileState: async () => mappedState(),
-      readMappedDriveShare: async () => String.raw`\\wsl.localhost\Debian`
+      readMappedDriveShare: async () => ({ share: String.raw`\\wsl.localhost\Debian` })
     })
     expect(await startWslDriveUncConversion(run, MAPPED_REQUEST)).toEqual({
       outcome: 'refused',
@@ -206,6 +211,29 @@ describe('startWslDriveUncConversion for a mapped drive', () => {
     })
     expect(run.pause).not.toHaveBeenCalled()
     expect(listWslDriveUncConversions(root)).toEqual([])
+  })
+
+  it('refuses a drive remapped to another folder of the distro since the window looked', async () => {
+    const run = deps({
+      readProfileState: async () => mappedState(),
+      readMappedDriveShare: async () => ({ share: String.raw`\\wsl.localhost\Ubuntu\home` })
+    })
+    expect(await startWslDriveUncConversion(run, MAPPED_REQUEST)).toEqual({
+      outcome: 'refused',
+      blockers: [{ kind: 'drive-not-mapped' }]
+    })
+  })
+
+  it('asks to try again when Windows did not answer in time, changing nothing', async () => {
+    const run = deps({
+      readProfileState: async () => mappedState(),
+      readMappedDriveShare: async () => 'unverifiable'
+    })
+    expect(await startWslDriveUncConversion(run, MAPPED_REQUEST)).toEqual({
+      outcome: 'refused',
+      blockers: [{ kind: 'drive-unverifiable' }]
+    })
+    expect(run.pause).not.toHaveBeenCalled()
   })
 
   it('refuses a project already saved under its share path', async () => {
@@ -221,7 +249,7 @@ describe('startWslDriveUncConversion for a mapped drive', () => {
         })
         return value
       },
-      readMappedDriveShare: async () => SHARE
+      readMappedDriveShare: async () => ({ share: SHARE })
     })
     expect(await startWslDriveUncConversion(run, MAPPED_REQUEST)).toEqual({
       outcome: 'refused',

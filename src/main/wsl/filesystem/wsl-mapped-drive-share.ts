@@ -4,6 +4,7 @@
  */
 import { realpath } from 'node:fs'
 import { win32 } from 'node:path'
+import { normalizeRuntimePathForComparison } from '../../../shared/file-access/cross-platform-path'
 import { parseWslUncPath } from '../../../shared/file-access/wsl-paths'
 
 const RESOLVE_TIMEOUT_MS = 2_000
@@ -95,6 +96,52 @@ export async function resolveWslMappedDrivePath(
     return null
   }
   return tail === '' || tail === '.' ? share : `${share}\\${tail}`
+}
+
+/** What a drive letter maps to right now; `unverifiable` when Windows didn't answer in time. */
+export type WslMappedDriveRead = { share: string | null } | 'unverifiable'
+
+/**
+ * Asks Windows again, bypassing the cache, for a decision that rewrites saved state: a drive
+ * remapped within the cache's minute must not convert a project into another distro or folder.
+ */
+export async function readWslMappedDriveShareNow(
+  letter: string,
+  deps: WslMappedDriveShareDeps = defaultDeps,
+  timeoutMs: number = deps.timeoutMs
+): Promise<WslMappedDriveRead> {
+  if (deps.platform !== 'win32' || !/^[A-Za-z]$/.test(letter)) {
+    return { share: null }
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<'unverifiable'>((resolve) => {
+    timer = setTimeout(() => resolve('unverifiable'), timeoutMs)
+  })
+  const lookup = deps.realpathRoot(`${letter.toUpperCase()}:\\`).then(
+    (real): WslMappedDriveRead => ({
+      share: parseWslUncPath(real) ? real.replace(/[\\/]+$/, '') : null
+    }),
+    // No such drive, or not one Windows can resolve: nothing is mapped there.
+    (): WslMappedDriveRead => ({ share: null })
+  )
+  return Promise.race([lookup, timeout]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * The drive still maps into `distro`, to the share the window showed when it was given one.
+ * A drive may map a folder inside the distro; the share is that folder's UNC path.
+ */
+export function wslMappedDriveMatches(
+  share: string | null,
+  distro: string,
+  expectedShare: string | undefined
+): share is string {
+  return (
+    share !== null &&
+    parseWslUncPath(share)?.distro.toLowerCase() === distro.toLowerCase() &&
+    (expectedShare === undefined ||
+      normalizeRuntimePathForComparison(share) === normalizeRuntimePathForComparison(expectedShare))
+  )
 }
 
 export function clearWslMappedDriveShareCacheForTests(): void {

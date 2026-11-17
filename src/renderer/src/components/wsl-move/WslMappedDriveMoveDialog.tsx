@@ -13,7 +13,8 @@ import { LoadingSpinner } from '@/components/LoadingSpinner'
 import {
   closeWslMappedDriveMove,
   confirmWslMappedDriveMove,
-  useWslMappedDriveMoveStore
+  useWslMappedDriveMoveStore,
+  wslMappedDriveMoveBusy
 } from './wsl-mapped-drive-move-store'
 
 /** The step before moving a mapped-drive project: reopen it at its share path, which restarts Orca. */
@@ -25,7 +26,15 @@ export function WslMappedDriveMoveDialog(): React.JSX.Element | null {
     return null
   }
   const { distro, letter, sharePath, name } = request
-  const converting = step.kind === 'converting'
+  const converting = wslMappedDriveMoveBusy(step)
+  const confirmLabel =
+    step.kind === 'converting'
+      ? t('wslMove.mappedDrive.pausing', 'Pausing terminals…')
+      : step.kind === 'restarting'
+        ? t('wslMove.mappedDrive.restartingLabel', 'Restarting…')
+        : step.kind === 'problem'
+          ? t('wslMove.mappedDrive.retry', 'Try again')
+          : t('wslMove.mappedDrive.confirm', 'Restart and continue')
   return (
     <Dialog open onOpenChange={(open) => !open && closeWslMappedDriveMove()}>
       <DialogContent
@@ -51,7 +60,7 @@ export function WslMappedDriveMoveDialog(): React.JSX.Element | null {
           </DialogDescription>
         </DialogHeader>
         {step.kind === 'problem' ? (
-          <div role="alert" className="space-y-1 text-sm text-muted-foreground">
+          <div role="alert" className="space-y-1 text-sm text-destructive">
             {step.messages.map((message) => (
               <p key={message}>{message}</p>
             ))}
@@ -66,15 +75,15 @@ export function WslMappedDriveMoveDialog(): React.JSX.Element | null {
           >
             {t('wslMove.mappedDrive.cancel', 'Cancel')}
           </Button>
+          {/* Fixed width: the label changes with each stage, and the footer must not shift. */}
           <Button
             type="button"
+            className="w-48"
             disabled={converting}
             onClick={() => void confirmWslMappedDriveMove()}
           >
             {converting ? <LoadingSpinner className="size-4" /> : null}
-            {step.kind === 'problem'
-              ? t('wslMove.mappedDrive.retry', 'Try again')
-              : t('wslMove.mappedDrive.confirm', 'Restart and continue')}
+            {confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

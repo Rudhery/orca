@@ -14,6 +14,8 @@ export type WslDriveUncConversionRequest = {
    * UNC path instead, so the WSL move can take them. Absent: the D1c conversion.
    */
   mappedDriveLetter?: string
+  /** The share the window showed for that drive; a drive remapped since is refused. */
+  mappedDriveShare?: string
 }
 
 export type WslDriveUncConversionBlocker =
@@ -32,8 +34,10 @@ export type WslDriveUncConversionBlocker =
         | 'not-windows-drive-mount'
         | 'windows-drive-folder'
     }
-  /** The mapped drive no longer points into the requested distro (`mappedDriveLetter`). */
+  /** The mapped drive no longer points where the window showed (`mappedDriveShare`). */
   | { kind: 'drive-not-mapped' }
+  /** Windows didn't say in time where the drive points (a distro still starting, say). */
+  | { kind: 'drive-unverifiable' }
   | { kind: 'windows-git-missing' }
   /** WSL Git made these worktrees; their links are Linux paths Windows Git can't follow. */
   | { kind: 'wsl-authored-worktrees'; repoId: string; paths: string[] }

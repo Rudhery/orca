@@ -4,7 +4,7 @@ import { useTranslate } from '@/i18n/use-translate'
 import { useAppStore } from '@/store'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { selectFolderWorkspaces } from '@/store/workspaces/catalog/workspace-record-fields'
-import { LOCAL_EXECUTION_HOST_ID } from '../../../../shared/execution-host/execution-host'
+import { resolveFolderWorkspaceHost } from '../../../../shared/folder-workspaces/folder-workspace-execution-host'
 import type { Repo } from '../../../../shared/repository/repo-types'
 import type { WslMoveRowRef } from '../../../../shared/wsl-move/wsl-move-driver-types'
 import { useWslMoveTargetForPath, useWslMoveTargetForRepo } from './wsl-move-entry'
@@ -45,14 +45,17 @@ export function WslMoveFolderWorkspaceMenuItem({
 }: {
   folderWorkspaceId: string
 }): React.JSX.Element | null {
-  const folder = useAppStore((s) =>
-    selectFolderWorkspaces(s).find(
-      (entry) =>
-        entry.id === folderWorkspaceId &&
-        (entry.executionHostId ?? LOCAL_EXECUTION_HOST_ID) === LOCAL_EXECUTION_HOST_ID &&
-        !entry.connectionId
-    )
-  )
+  const folder = useAppStore((s) => {
+    const entry = selectFolderWorkspaces(s).find((row) => row.id === folderWorkspaceId)
+    // Main's rule: this row alone, as another host may hold a folder workspace with the same id.
+    return entry &&
+      resolveFolderWorkspaceHost(
+        { repos: s.repos, projectGroups: s.projectGroups, folderWorkspaces: [entry] },
+        entry.id
+      ).kind === 'local'
+      ? entry
+      : undefined
+  })
   const target = useWslMoveTargetForPath(folder?.folderPath, !!folder)
   return folder ? (
     <MoveItem target={target} project={{ kind: 'folder', id: folder.id }} name={folder.name} />

@@ -13,6 +13,7 @@ import {
   useWslMappedDriveMoveStore
 } from './wsl-mapped-drive-move-store'
 
+const SHARE = String.raw`\\wsl.localhost\Ubuntu`
 const SHARE_PATH = String.raw`\\wsl.localhost\Ubuntu\home\u\repo`
 const host = {
   id: 'env-1',
@@ -38,19 +39,15 @@ afterEach(() => {
 
 describe('wslMoveTargetOfPath', () => {
   it('names the mapped drive for a drive path whose share has a host', () => {
-    expect(wslMoveTargetOfPath(String.raw`w:\home\u\repo`, SHARE_PATH, [host])).toEqual({
+    expect(wslMoveTargetOfPath(String.raw`w:\home\u\repo`, SHARE, [host])).toEqual({
       distro: 'Ubuntu',
-      mappedDrive: { letter: 'W', sharePath: SHARE_PATH }
+      mappedDrive: { letter: 'W', share: SHARE, sharePath: SHARE_PATH }
     })
   })
 
   it('offers nothing without a host, or for a share into a Windows drive', () => {
-    expect(wslMoveTargetOfPath(String.raw`W:\home\u\repo`, SHARE_PATH, [])).toBeNull()
-    expect(
-      wslMoveTargetOfPath(String.raw`W:\mnt\c\src`, String.raw`\\wsl.localhost\Ubuntu\mnt\c\src`, [
-        host
-      ])
-    ).toBeNull()
+    expect(wslMoveTargetOfPath(String.raw`W:\home\u\repo`, SHARE, [])).toBeNull()
+    expect(wslMoveTargetOfPath(String.raw`W:\mnt\c\src`, SHARE, [host])).toBeNull()
   })
 
   it('keeps a UNC project on the plain move', () => {
@@ -59,7 +56,10 @@ describe('wslMoveTargetOfPath', () => {
 })
 
 describe('the mapped-drive move', () => {
-  const target = { distro: 'Ubuntu', mappedDrive: { letter: 'W', sharePath: SHARE_PATH } }
+  const target = {
+    distro: 'Ubuntu',
+    mappedDrive: { letter: 'W', share: SHARE, sharePath: SHARE_PATH }
+  }
 
   it('asks main to reopen the project at its share path', async () => {
     convert.mockResolvedValue({ outcome: 'restarting', migrationId: 'conv-1' })
@@ -70,9 +70,11 @@ describe('the mapped-drive move', () => {
       distro: 'Ubuntu',
       repoIds: [],
       folderWorkspaceIds: ['notes'],
-      mappedDriveLetter: 'W'
+      mappedDriveLetter: 'W',
+      // What the window showed, so main refuses a drive remapped since.
+      mappedDriveShare: SHARE
     })
-    expect(useWslMappedDriveMoveStore.getState().step).toEqual({ kind: 'converting' })
+    expect(useWslMappedDriveMoveStore.getState().step).toEqual({ kind: 'restarting' })
     expect(toast).toHaveBeenCalledOnce()
   })
 
@@ -86,13 +88,30 @@ describe('the mapped-drive move', () => {
     })
   })
 
-  it('opens the move for the reopened project once the restart is done', async () => {
+  it('says to try again when the drive could not be checked in time', async () => {
+    convert.mockResolvedValue({ outcome: 'refused', blockers: [{ kind: 'drive-unverifiable' }] })
+    openWslMoveForProject(target, { kind: 'repo', id: 'repo-w' }, 'repo')
+    await confirmWslMappedDriveMove()
+    expect(useWslMappedDriveMoveStore.getState().step).toEqual({
+      kind: 'problem',
+      messages: [expect.stringContaining('Try again')]
+    })
+  })
+
+  it('opens the move with every reopened project checked once the restart is done', async () => {
     takeMappedDriveMovesDue.mockResolvedValue([
-      { distro: 'Ubuntu', repoIds: ['repo-w'], folderWorkspaceIds: [] }
+      { distro: 'Ubuntu', repoIds: ['repo-w', 'repo-nested'], folderWorkspaceIds: ['notes'] }
     ])
     await openWslMappedDriveMovesDue()
     expect(openWslMoveDialog).toHaveBeenCalledWith(
-      expect.objectContaining({ distro: 'Ubuntu', only: { kind: 'repo', id: 'repo-w' } })
+      expect.objectContaining({
+        distro: 'Ubuntu',
+        only: [
+          { kind: 'repo', id: 'repo-w' },
+          { kind: 'repo', id: 'repo-nested' },
+          { kind: 'folder', id: 'notes' }
+        ]
+      })
     )
   })
 })

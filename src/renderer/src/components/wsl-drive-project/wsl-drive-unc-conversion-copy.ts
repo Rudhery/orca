@@ -45,6 +45,13 @@ function mappedDriveBlockerMessage(
   blocker: WslDriveUncConversionBlocker,
   letter: string
 ): string | null {
+  if (blocker.kind === 'drive-unverifiable') {
+    return translate(
+      'wslDriveUnc.mappedDrive.unverifiable',
+      'Orca couldn’t check where drive {{letter}}: points just now, so nothing changed. Try again in a moment.',
+      { letter }
+    )
+  }
   if (blocker.kind === 'drive-not-mapped') {
     return translate(
       'wslDriveUnc.mappedDrive.notMapped',
@@ -76,6 +83,11 @@ function mappedDriveBlockerMessage(
 
 function blockerMessage(blocker: WslDriveUncConversionBlocker, drivePath: string): string {
   switch (blocker.kind) {
+    case 'drive-unverifiable':
+      return translate(
+        'wslDriveUnc.blocker.driveUnverifiable',
+        'Orca couldn’t check where that drive points just now, so nothing changed. Try again in a moment.'
+      )
     case 'drive-not-mapped':
       return translate(
         'wslDriveUnc.blocker.driveNotMapped',

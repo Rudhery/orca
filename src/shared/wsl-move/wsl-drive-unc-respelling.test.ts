@@ -48,7 +48,9 @@ describe('wslDriveUncRespelling for a mapped drive', () => {
   })
 
   it('leaves the D1c respelling as it was', () => {
-    const d1c = wslDriveUncRespelling({ distro: 'Ubuntu' })
+    const d1c = wslDriveUncRespelling({ distro: 'Ubuntu' }, [
+      String.raw`\\wsl.localhost\Ubuntu\mnt\c\src`
+    ])
     expect(d1c.path(String.raw`\\wsl.localhost\Ubuntu\mnt\c\src`)).toBe(String.raw`C:\src`)
     expect(d1c.comparisonForm('//wsl/ubuntu/mnt/c/src')).toBe('c:/src')
     expect(d1c.path(String.raw`W:\home`)).toBeNull()
@@ -79,5 +81,20 @@ describe('wslDriveUncRendererKeys for a mapped drive', () => {
       ])
     )
     expect(keys.path(String.raw`W:\home\me\other`)).toBeNull()
+  })
+
+  it("keeps the root's case for a mixed-case folder, whose key is folded", () => {
+    const oldId = String.raw`r::W:\home\me\App`
+    const newId = String.raw`r::\\wsl.localhost\Ubuntu\home\me\App`
+    const keys = wslDriveUncRendererKeys({
+      distro: 'Ubuntu',
+      mappedDrive: DRIVE,
+      worktreeIds: [[oldId, newId]],
+      rootPaths: [String.raw`W:\home\me\App`]
+    })
+    const route = { executionHostId: 'local' }
+    expect(
+      convertedQuickOpenHistoryScope(JSON.stringify([route, oldId, 'w:/home/me/app']), keys)
+    ).toBe(JSON.stringify([route, newId, '//wsl/ubuntu/home/me/App']))
   })
 })

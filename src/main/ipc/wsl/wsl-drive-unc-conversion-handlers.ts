@@ -26,7 +26,7 @@ import {
   takeWslMappedDriveMovesDue,
   type WslDriveUncConversionOutcome
 } from '../../wsl/filesystem/wsl-drive-unc-conversion-startup'
-import { resolveWslMappedDrivePath } from '../../wsl/filesystem/wsl-mapped-drive-share'
+import { readWslMappedDriveShareNow } from '../../wsl/filesystem/wsl-mapped-drive-share'
 import { wslHostsGateOpen, wslHostsOptedIn } from '../../wsl/host-lifecycle/wsl-host-gate'
 import { createWslMoveDriverDeps } from './wsl-move-driver-wiring'
 import { getTrustedUIRendererWebContents } from '../ui'
@@ -70,7 +70,7 @@ export function registerWslDriveUncConversionHandlers(
           userDataPath,
           profileId: activeProfileId,
           readDriveMounts: readWslDistroDriveMounts,
-          readMappedDriveShare: (letter) => resolveWslMappedDrivePath(`${letter}:\\`),
+          readMappedDriveShare: (letter) => readWslMappedDriveShareNow(letter),
           readProfileState: async () => {
             await store.flushPendingOrThrowAsync()
             return readProfileProjectTransferState(activeProfileId, getProfileUserDataPath()).state
@@ -149,19 +149,27 @@ function parseRequest(value: unknown): WslDriveUncConversionRequest {
   const repoIds = 'repoIds' in record ? record.repoIds : undefined
   const folderWorkspaceIds = 'folderWorkspaceIds' in record ? record.folderWorkspaceIds : []
   const mappedDriveLetter = 'mappedDriveLetter' in record ? record.mappedDriveLetter : undefined
+  const mappedDriveShare = 'mappedDriveShare' in record ? record.mappedDriveShare : undefined
   if (
     typeof distro !== 'string' ||
     !distro ||
     !isIdList(repoIds) ||
     !isIdList(folderWorkspaceIds) ||
     (mappedDriveLetter !== undefined &&
-      (typeof mappedDriveLetter !== 'string' || !/^[A-Za-z]$/.test(mappedDriveLetter)))
+      (typeof mappedDriveLetter !== 'string' || !/^[A-Za-z]$/.test(mappedDriveLetter))) ||
+    (mappedDriveShare !== undefined && (typeof mappedDriveShare !== 'string' || !mappedDriveShare))
   ) {
     throw new Error('wsl_drive_unc_invalid_args')
   }
   return mappedDriveLetter === undefined
     ? { distro, repoIds, folderWorkspaceIds }
-    : { distro, repoIds, folderWorkspaceIds, mappedDriveLetter }
+    : {
+        distro,
+        repoIds,
+        folderWorkspaceIds,
+        mappedDriveLetter,
+        ...(mappedDriveShare === undefined ? {} : { mappedDriveShare })
+      }
 }
 
 function isIdList(value: unknown): value is string[] {

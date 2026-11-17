@@ -25,6 +25,8 @@ export type WslDriveUncRendererKeys = {
   worktreeId: (worktreeId: string) => string | null
   /** A path inside a converted folder, in its converted form; null for any other path. */
   path: (path: string) => string | null
+  /** A comparison-form key inside a converted folder, re-keyed in comparison form; else null. */
+  comparisonKey: (key: string) => string | null
 }
 
 export function wslDriveUncRendererKeys(
@@ -34,14 +36,13 @@ export function wslDriveUncRendererKeys(
   >
 ): WslDriveUncRendererKeys {
   const ids = new Map(conversion.worktreeIds)
-  const respelling = wslDriveUncRespelling(conversion)
+  const respelling = wslDriveUncRespelling(conversion, conversion.rootPaths)
   const roots = conversion.rootPaths.flatMap((root) => {
     const converted = respelling.path(root)
     return converted ? [normalizeRuntimePathForComparison(converted)] : []
   })
   const path = (value: string): string | null => {
-    // Quick-open keeps its roots in comparison form, which folds both UNC spellings into one.
-    const converted = respelling.comparisonForm(value) ?? respelling.path(value)
+    const converted = respelling.path(value)
     if (!converted) {
       return null
     }
@@ -51,7 +52,11 @@ export function wslDriveUncRendererKeys(
     )
     return inRoot ? converted : null
   }
-  return { worktreeId: (worktreeId) => ids.get(worktreeId) ?? null, path }
+  return {
+    worktreeId: (worktreeId) => ids.get(worktreeId) ?? null,
+    path,
+    comparisonKey: respelling.comparisonForm
+  }
 }
 
 function parseArray(value: string): unknown[] | null {
@@ -84,10 +89,9 @@ export function convertedQuickOpenHistoryScope(
     return null
   }
   const nextId = keys.worktreeId(worktreeId)
-  const nextRoot = keys.path(root)
-  return nextId !== null && nextRoot !== null
-    ? JSON.stringify([route, nextId, normalizeRuntimePathForComparison(nextRoot)])
-    : null
+  // Quick-open keeps its roots in comparison form, which folds both UNC spellings into one.
+  const nextRoot = keys.comparisonKey(root)
+  return nextId !== null && nextRoot !== null ? JSON.stringify([route, nextId, nextRoot]) : null
 }
 
 /** `[worktreeId, environment, sshTarget, filePath]`, as buildFileViewPreferenceKey writes it. */

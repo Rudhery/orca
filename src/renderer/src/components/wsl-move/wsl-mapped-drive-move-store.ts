@@ -16,15 +16,26 @@ import { openWslMoveDialogFor, type WslMoveTarget } from './wsl-move-entry'
 
 export type WslMappedDriveMoveRequest = {
   distro: string
-  /** The drive letter the project is saved under. */
+  /** The drive letter the project is saved under, and the share it showed. */
   letter: string
+  share: string
   /** Where the project reopens: its folder on the distro share. */
   sharePath: string
   ref: WslMoveRowRef
   name: string
 }
 
-type Step = { kind: 'review' } | { kind: 'converting' } | { kind: 'problem'; messages: string[] }
+type Step =
+  | { kind: 'review' }
+  /** Main is checking the drive and putting the project's terminals to sleep. */
+  | { kind: 'converting' }
+  /** Main accepted; the app is about to restart. */
+  | { kind: 'restarting' }
+  | { kind: 'problem'; messages: string[] }
+
+export function wslMappedDriveMoveBusy(step: Step): boolean {
+  return step.kind === 'converting' || step.kind === 'restarting'
+}
 
 type State = { request: WslMappedDriveMoveRequest | null; step: Step }
 
@@ -51,7 +62,7 @@ export function openWslMoveForProject(
 }
 
 export function closeWslMappedDriveMove(): void {
-  if (useWslMappedDriveMoveStore.getState().step.kind !== 'converting') {
+  if (!wslMappedDriveMoveBusy(useWslMappedDriveMoveStore.getState().step)) {
     useWslMappedDriveMoveStore.setState({ request: null, step: { kind: 'review' } })
   }
 }
@@ -68,7 +79,8 @@ export async function confirmWslMappedDriveMove(): Promise<void> {
       distro: request.distro,
       repoIds: request.ref.kind === 'repo' ? [request.ref.id] : [],
       folderWorkspaceIds: request.ref.kind === 'folder' ? [request.ref.id] : [],
-      mappedDriveLetter: request.letter
+      mappedDriveLetter: request.letter,
+      mappedDriveShare: request.share
     })
   } catch {
     useWslMappedDriveMoveStore.setState({
@@ -88,7 +100,8 @@ export async function confirmWslMappedDriveMove(): Promise<void> {
     return
   }
   if (result.outcome === 'restarting') {
-    // The dialog stays on its spinner until the window goes away.
+    // The dialog stays until the window goes away.
+    useWslMappedDriveMoveStore.setState({ step: { kind: 'restarting' } })
     toast(translate('wslMove.mappedDrive.restarting', 'Restarting Orca to reopen this project…'))
     return
   }
@@ -117,5 +130,5 @@ export async function openWslMappedDriveMovesDue(): Promise<void> {
     ...first.repoIds.map((id) => ({ kind: 'repo' as const, id })),
     ...first.folderWorkspaceIds.map((id) => ({ kind: 'folder' as const, id }))
   ]
-  openWslMoveDialogFor(first.distro, refs.length === 1 ? refs[0] : undefined)
+  openWslMoveDialogFor(first.distro, refs)
 }

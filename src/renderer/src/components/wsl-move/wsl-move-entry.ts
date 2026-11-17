@@ -10,6 +10,7 @@ import {
   LOCAL_EXECUTION_HOST_ID
 } from '../../../../shared/execution-host/execution-host'
 import { wslHostMovableDistroOfPath } from '../../../../shared/file-access/wsl-paths'
+import { wslMappedDrivePathToShare } from '../../../../shared/wsl-move/wsl-drive-unc-respelling'
 import type { Repo } from '../../../../shared/repository/repo-types'
 import type { WslMoveRowRef } from '../../../../shared/wsl-move/wsl-move-driver-types'
 import {
@@ -21,7 +22,11 @@ import { openWslMoveDialog } from './wsl-move-dialog-store'
 import { selectFolderWorkspaces } from '@/store/workspaces/catalog/workspace-record-fields'
 import { findWslHostForDistro, wslMoveCatalogCandidates } from './wsl-move-scope-rows'
 
-export function openWslMoveDialogFor(distro: string, only?: WslMoveRowRef): void {
+/** `only`: the projects that start checked; absent, every project of the distro does. */
+export function openWslMoveDialogFor(
+  distro: string,
+  only?: WslMoveRowRef | readonly WslMoveRowRef[]
+): void {
   void openWslMoveDialog({
     distro,
     only,
@@ -38,32 +43,47 @@ export function openWslMoveDialogFor(distro: string, only?: WslMoveRowRef): void
 /** Where a local project can move: its distro's host, spelled as the host names the distro. */
 export type WslMoveTarget = {
   distro: string
-  /** Saved under a drive letter mapped to the distro's share: the move reopens it there first. */
-  mappedDrive?: { letter: string; sharePath: string }
+  /**
+   * Saved under a drive letter mapped to the distro's share: the move reopens it there first.
+   * `share` is the drive's own share, `sharePath` the project's folder on it.
+   */
+  mappedDrive?: { letter: string; share: string; sharePath: string }
 }
 
 const DRIVE_PATH = /^[A-Za-z]:[\\/]/
+const SHARE_CACHE_TTL_MS = 60_000
+// Per drive letter, so a menu opened again shows its item at once instead of after the lookup.
+const shareCache = new Map<string, { share: string | null; at: number }>()
 
-/** The share path of a drive-letter path once main resolved it; null for any other path. */
+function cachedShare(letter: string): { share: string | null } | null {
+  const entry = shareCache.get(letter)
+  return entry && Date.now() - entry.at < SHARE_CACHE_TTL_MS ? entry : null
+}
+
+/** The share a drive letter maps to once main resolved it; null for any other drive. */
 function useMappedDriveShare(path: string | null): string | null {
-  const [resolved, setResolved] = useState<{ path: string; share: string | null } | null>(null)
-  const wanted = path && DRIVE_PATH.test(path) ? path : null
+  const letter = path && DRIVE_PATH.test(path) ? path[0].toUpperCase() : null
+  const [resolved, setResolved] = useState<{ letter: string; share: string | null } | null>(null)
   useEffect(() => {
-    if (!wanted) {
+    if (!letter || cachedShare(letter)) {
       return
     }
     let current = true
     // Main bounds and caches the lookup per drive letter.
-    void resolveWslMappedDrivePath(wanted).then((share) => {
+    void resolveWslMappedDrivePath(`${letter}:\\`).then((share) => {
+      shareCache.set(letter, { share, at: Date.now() })
       if (current) {
-        setResolved({ path: wanted, share })
+        setResolved({ letter, share })
       }
     })
     return () => {
       current = false
     }
-  }, [wanted])
-  return wanted && resolved?.path === wanted ? resolved.share : null
+  }, [letter])
+  if (!letter) {
+    return null
+  }
+  return cachedShare(letter)?.share ?? (resolved?.letter === letter ? resolved.share : null)
 }
 
 /** The host a local project's folder could move to, or null where no move is offered. */
@@ -79,21 +99,25 @@ export function useWslMoveTargetForPath(
   return offered ? wslMoveTargetOfPath(offered, share, environments) : null
 }
 
-/** `share` is the resolved share path of a drive-letter `path`, else null. */
+/** `share` is the share a drive-letter `path`'s drive maps to, else null. */
 export function wslMoveTargetOfPath(
   path: string,
   share: string | null,
   environments: Parameters<typeof findWslHostForDistro>[0]
 ): WslMoveTarget | null {
   const uncDistro = wslHostMovableDistroOfPath(path)
-  const sharePath = uncDistro || !DRIVE_PATH.test(path) ? null : share
+  const letter = path[0]?.toUpperCase() ?? ''
+  const sharePath =
+    uncDistro || !share || !DRIVE_PATH.test(path)
+      ? null
+      : wslMappedDrivePathToShare(path, { letter, share })
   const distro = uncDistro ?? (sharePath ? wslHostMovableDistroOfPath(sharePath) : null)
   const host = distro ? findWslHostForDistro(environments, distro) : null
   if (!host) {
     return null
   }
-  return sharePath
-    ? { distro: host.distro, mappedDrive: { letter: path[0].toUpperCase(), sharePath } }
+  return sharePath && share
+    ? { distro: host.distro, mappedDrive: { letter, share, sharePath } }
     : { distro: host.distro }
 }
 

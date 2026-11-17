@@ -68,3 +68,32 @@ describe('rewriteWslDriveUncValue', () => {
     expect(rewriteWslDriveUncValue(untouched, rewriter)).toBe(untouched)
   })
 })
+
+describe('createWslDriveUncRewriter for a mapped drive', () => {
+  const mapped = createWslDriveUncRewriter({
+    distro: 'Ubuntu',
+    mappedDrive: { letter: 'W', share: String.raw`\\wsl.localhost\Ubuntu` },
+    repoIds: new Set(['r1']),
+    folderWorkspaceIds: new Set(),
+    roots: [String.raw`W:\home\me\App`]
+  })
+
+  it.each([
+    [
+      'a saved path',
+      String.raw`W:\home\me\App\src`,
+      String.raw`\\wsl.localhost\Ubuntu\home\me\App\src`
+    ],
+    // Case is folded in the key; the root's own spelling restores it.
+    ['a comparison key of the root', 'w:/home/me/app', '//wsl/ubuntu/home/me/App'],
+    ['a comparison key inside it', 'w:/home/me/app/src', '//wsl/ubuntu/home/me/App/src'],
+    ['a comparison key of another folder', 'w:/home/me/other', 'w:/home/me/other'],
+    ['a path of another folder', String.raw`W:\home\me\other`, String.raw`W:\home\me\other`]
+  ])('re-keys %s', (_label, value, expected) => {
+    expect(mapped.identity(value)).toBe(expected)
+  })
+
+  it('keeps a D1c comparison key in comparison form', () => {
+    expect(rewriter.identity('//wsl/ubuntu/mnt/c/src/app/lib')).toBe('c:/src/app/lib')
+  })
+})

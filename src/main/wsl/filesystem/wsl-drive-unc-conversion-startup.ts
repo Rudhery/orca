@@ -31,6 +31,13 @@ import { journalDomainDatabasePath } from '../../native-chat/agent-session-journ
 import { rewriteWslDriveUncState } from './wsl-drive-unc-state-rewrite'
 import { WSL_DRIVE_UNC_STATE_DISPOSITIONS } from '../../../shared/wsl-move/wsl-drive-unc-state-dispositions'
 import type { WslMappedDriveMoveDue } from '../../../shared/wsl-move/wsl-drive-unc-conversion-types'
+import {
+  readWslMappedDriveShareNow,
+  wslMappedDriveMatches,
+  type WslMappedDriveRead
+} from './wsl-mapped-drive-share'
+
+const STARTUP_DRIVE_READ_TIMEOUT_MS = 10_000
 
 export type WslDriveUncConversionStartupDeps = {
   /** Where the journal lives. */
@@ -40,7 +47,12 @@ export type WslDriveUncConversionStartupDeps = {
   profileId: string
   stores: readonly WslDriveUncConversionStore[]
   now?: () => Date
+  /** Where a drive letter maps right now; a mapped-drive plan runs only while it still matches. */
+  readMappedDriveShare?: (letter: string) => Promise<WslMappedDriveRead>
 }
+
+/** The restart follows the confirm within seconds; a plan this old was left by another run. */
+const MAPPED_DRIVE_PLAN_MAX_AGE_MS = 60 * 60 * 1000
 
 export type WslDriveUncConversionOutcome =
   | {
@@ -51,6 +63,8 @@ export type WslDriveUncConversionOutcome =
       distro?: string
       /** Set for a mapped-drive respelling, whose projects the WSL move takes next. */
       mappedDrive?: boolean
+      /** This run rewrote the profile; a later run only finishes outside stores. */
+      respelledThisRun?: boolean
     }
   /** The profile could not be rewritten; nothing changed, and the panes stay asleep. */
   | { migrationId: string; outcome: 'rolled-back'; detail: string }
@@ -74,8 +88,10 @@ async function runOne(
 ): Promise<WslDriveUncConversionOutcome> {
   const { migrationId } = initial
   let record = initial
-  if (record.phase === 'prepared') {
+  const advancing = record.phase === 'prepared'
+  if (advancing) {
     try {
+      await assertMappedDriveStillMatches(deps, record)
       record = rewriteProfile(deps, record)
     } catch (error) {
       removeWslDriveUncConversion(deps.userDataPath, migrationId)
@@ -111,7 +127,36 @@ async function runOne(
     repoIds: record.repoIds,
     folderWorkspaceIds: record.folderWorkspaceIds,
     distro: record.distro,
-    ...(record.mappedDrive ? { mappedDrive: true } : {})
+    ...(record.mappedDrive ? { mappedDrive: true } : {}),
+    ...(advancing ? { respelledThisRun: true } : {})
+  }
+}
+
+/**
+ * A mapped-drive plan names the drive's share as it was at the confirm. One left over (an older
+ * build ran in between, say) or a drive remapped since rolls back instead of rewriting into the
+ * wrong distro or folder.
+ */
+async function assertMappedDriveStillMatches(
+  deps: WslDriveUncConversionStartupDeps,
+  record: WslDriveUncConversion
+): Promise<void> {
+  const drive = record.mappedDrive
+  if (!drive) {
+    return
+  }
+  const age = (deps.now?.() ?? new Date()).getTime() - Date.parse(record.createdAt)
+  if (!(age >= 0 && age <= MAPPED_DRIVE_PLAN_MAX_AGE_MS)) {
+    throw new Error('wsl_mapped_drive_plan_expired')
+  }
+  const read = deps.readMappedDriveShare
+    ? await deps.readMappedDriveShare(drive.letter)
+    : 'unverifiable'
+  if (read === 'unverifiable') {
+    throw new Error('wsl_mapped_drive_unverifiable')
+  }
+  if (!wslMappedDriveMatches(read.share, record.distro, drive.share)) {
+    throw new Error('wsl_mapped_drive_remapped')
   }
 }
 
@@ -198,7 +243,10 @@ export function wslMappedDriveMovesDueOf(
   outcomes: readonly WslDriveUncConversionOutcome[]
 ): WslMappedDriveMoveDue[] {
   return outcomes.flatMap((outcome) =>
-    outcome.outcome === 'converted' && outcome.mappedDrive && outcome.distro
+    outcome.outcome === 'converted' &&
+    outcome.mappedDrive &&
+    outcome.respelledThisRun &&
+    outcome.distro
       ? [
           {
             distro: outcome.distro,
@@ -229,6 +277,9 @@ export async function runPendingWslDriveUncConversions(paths: {
     }
     lastOutcomes = await runWslDriveUncConversionsAtStartup({
       ...paths,
+      // Longer than an add's wait: the distro may still be starting with the app.
+      readMappedDriveShare: (letter) =>
+        readWslMappedDriveShareNow(letter, undefined, STARTUP_DRIVE_READ_TIMEOUT_MS),
       stores: wslDriveUncConversionStores({
         daemonHistoryDir: getHistoryRoot(),
         shellHistoryRoots: [getHistoryRoot(), ...listWslHistoryRoots()],

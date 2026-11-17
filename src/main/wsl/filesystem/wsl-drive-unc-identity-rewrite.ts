@@ -49,7 +49,7 @@ export type WslDriveUncRewriter = {
 const VERBATIM_KEYS: ReadonlySet<string> = new Set(['priorWorktreeIds'])
 
 export function createWslDriveUncRewriter(scope: WslDriveUncRewriteScope): WslDriveUncRewriter {
-  const respelling = wslDriveUncRespelling(scope)
+  const respelling = wslDriveUncRespelling(scope, scope.roots)
   const roots = scope.roots.flatMap((root) => {
     const converted = respelling.path(root)
     return converted ? [normalizeRuntimePathForComparison(converted)] : []
@@ -84,7 +84,12 @@ export function createWslDriveUncRewriter(scope: WslDriveUncRewriteScope): WslDr
     )
   }
   const barePath = (value: string): string => {
-    const mapped = respelling.comparisonForm(value) ?? respelling.path(value)
+    // A comparison key stays one; the respelling checks its root itself.
+    const comparison = respelling.comparisonForm(value)
+    if (comparison) {
+      return comparison
+    }
+    const mapped = respelling.path(value)
     return mapped && inRoot(mapped) ? mapped : value
   }
   const identity = (value: string): string => {

@@ -33,7 +33,8 @@ import {
   type WslDriveUncTarget
 } from './wsl-drive-unc-project-scope'
 import { collectWslMappedDriveScope } from './wsl-mapped-drive-project-scope'
-import { parseWslUncPath, wslUncDrivePathToWindows } from '../../../shared/file-access/wsl-paths'
+import { wslMappedDriveMatches, type WslMappedDriveRead } from './wsl-mapped-drive-share'
+import { wslUncDrivePathToWindows } from '../../../shared/file-access/wsl-paths'
 import {
   wslDriveUncRespelling,
   type WslMappedDrive
@@ -50,8 +51,8 @@ export type WslDriveUncConversionRunDeps = Pick<
   profileId: string
   /** The distro's Windows-drive mounts; null when unreadable, which refuses every path. */
   readDriveMounts: (distro: string) => Promise<readonly WindowsDriveMount[] | null>
-  /** The distro share a drive letter maps to (`\\wsl.localhost\<d>`); null for any other drive. */
-  readMappedDriveShare: (letter: string) => Promise<string | null>
+  /** Where a drive letter maps right now, never cached: this decides what gets rewritten. */
+  readMappedDriveShare: (letter: string) => Promise<WslMappedDriveRead>
   /** The saved profile, flushed first: the dry run must see what the restart will rewrite. */
   readProfileState: () => Promise<PersistedState>
   pause: (scope: WslMoveTerminalScope) => Promise<{ panes: readonly unknown[] } | WslMoveRefusal>
@@ -70,9 +71,10 @@ export async function startWslDriveUncConversion(
   if (journals.some((journal) => journal.phase === 'prepared')) {
     return refused([{ kind: 'conversion-pending' }])
   }
-  const mappedDrive = request.mappedDriveLetter
-    ? await readMappedDrive(deps, request.mappedDriveLetter, request.distro)
-    : undefined
+  const mappedDrive = request.mappedDriveLetter ? await readMappedDrive(deps, request) : undefined
+  if (mappedDrive === 'unverifiable') {
+    return refused([{ kind: 'drive-unverifiable' }])
+  }
   if (mappedDrive === null) {
     return refused([{ kind: 'drive-not-mapped' }])
   }
@@ -149,19 +151,21 @@ export async function startWslDriveUncConversion(
   return { outcome: 'restarting', migrationId }
 }
 
-/** The drive's share, read now; null when it no longer maps into `distro`. */
+/** The drive's share, read now; null when it no longer maps where the window showed. */
 async function readMappedDrive(
   deps: Pick<WslDriveUncConversionRunDeps, 'readMappedDriveShare'>,
-  letter: string,
-  distro: string
-): Promise<WslMappedDrive | null> {
+  request: WslDriveUncConversionRequest
+): Promise<WslMappedDrive | null | 'unverifiable'> {
+  const letter = request.mappedDriveLetter ?? ''
   if (!/^[A-Za-z]$/.test(letter)) {
     return null
   }
-  const share = await deps.readMappedDriveShare(letter)
-  // A drive may map a folder inside the distro; the share is that folder's UNC path.
-  return share && parseWslUncPath(share)?.distro.toLowerCase() === distro.toLowerCase()
-    ? { letter: letter.toUpperCase(), share }
+  const read = await deps.readMappedDriveShare(letter)
+  if (read === 'unverifiable') {
+    return read
+  }
+  return wslMappedDriveMatches(read.share, request.distro, request.mappedDriveShare)
+    ? { letter: letter.toUpperCase(), share: read.share }
     : null
 }
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   clearWslMappedDriveShareCacheForTests,
+  readWslMappedDriveShareNow,
   resolveWslMappedDrivePath,
   type WslMappedDriveShareDeps
 } from './wsl-mapped-drive-share'
@@ -142,5 +143,44 @@ describe('resolveWslMappedDrivePath', () => {
       '\\\\wsl.localhost\\Ubuntu\\home\\u'
     )
     await expect(resolveWslMappedDrivePath('W:\\..\\etc', deps(realpathRoot))).resolves.toBe(null)
+  })
+})
+
+describe('readWslMappedDriveShareNow', () => {
+  it('asks Windows again rather than trusting a cached answer from before a remap', async () => {
+    const realpathRoot = vi
+      .fn<WslMappedDriveShareDeps['realpathRoot']>()
+      .mockResolvedValueOnce('\\\\wsl.localhost\\Ubuntu\\')
+      .mockResolvedValueOnce('\\\\wsl.localhost\\Debian\\')
+    await resolveWslMappedDrivePath('W:\\x', deps(realpathRoot))
+    await expect(readWslMappedDriveShareNow('w', deps(realpathRoot))).resolves.toEqual({
+      share: '\\\\wsl.localhost\\Debian'
+    })
+    expect(realpathRoot).toHaveBeenLastCalledWith('W:\\')
+  })
+
+  it('tells a slow drive apart from one that maps nowhere', async () => {
+    await expect(
+      readWslMappedDriveShareNow(
+        'W',
+        deps(() => new Promise<string>(() => {}))
+      )
+    ).resolves.toBe('unverifiable')
+    await expect(
+      readWslMappedDriveShareNow(
+        'W',
+        deps(async () => {
+          throw new Error('ENOENT')
+        })
+      )
+    ).resolves.toEqual({ share: null })
+    await expect(
+      readWslMappedDriveShareNow(
+        'C',
+        deps(async () => 'C:\\')
+      )
+    ).resolves.toEqual({
+      share: null
+    })
   })
 })

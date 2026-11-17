@@ -24841,7 +24841,9 @@
       "retry": "Try again",
       "confirm": "Restart and continue",
       "failed": "Orca could not reopen this project, so nothing changed.",
-      "restarting": "Restarting Orca to reopen this project…"
+      "restarting": "Restarting Orca to reopen this project…",
+      "pausing": "Pausing terminals…",
+      "restartingLabel": "Restarting…"
     }
   },
   "onboarding": {
@@ -25269,12 +25271,14 @@
       "differingState": "Orca saved different details for this folder under both its WSL path and {{drivePath}}, so nothing changed.",
       "projectSplit": "This project also holds a repository that isn’t converting, so nothing changed.",
       "driveNotMapped": "That drive no longer points into this distro, so nothing changed.",
-      "windowsDriveFolder": "This folder is a Windows drive seen through WSL, so it stays on this computer."
+      "windowsDriveFolder": "This folder is a Windows drive seen through WSL, so it stays on this computer.",
+      "driveUnverifiable": "Orca couldn’t check where that drive points just now, so nothing changed. Try again in a moment."
     },
     "mappedDrive": {
       "notMapped": "Drive {{letter}}: no longer points into this distro, so nothing changed.",
       "mixed": "Some of this project’s folders aren’t on drive {{letter}}:, so they can’t move with it.",
-      "notOnDrive": "This project isn’t on drive {{letter}}: on this computer."
+      "notOnDrive": "This project isn’t on drive {{letter}}: on this computer.",
+      "unverifiable": "Orca couldn’t check where drive {{letter}}: points just now, so nothing changed. Try again in a moment."
     }
   },
   "runtime": {

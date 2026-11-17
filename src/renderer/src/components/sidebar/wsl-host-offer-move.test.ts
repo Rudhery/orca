@@ -44,7 +44,7 @@ describe('moveWslHostOfferProject', () => {
 
   it('reopens a project the add found saved as W: at its share path before the move', async () => {
     // Registration matches by real path, so the share spelling resolves to the saved W: row.
-    resolveWslMappedDrivePath.mockResolvedValue(offer.sharePath)
+    resolveWslMappedDrivePath.mockResolvedValue('\\\\wsl.localhost\\Ubuntu')
     moveWslHostOfferProject(offer, {
       status: 'completed',
       repo: { id: 'repo-w', path: 'W:\\home\\u\\repo', displayName: 'repo' }
@@ -53,11 +53,13 @@ describe('moveWslHostOfferProject', () => {
       expect(openWslMappedDriveMove).toHaveBeenCalledWith({
         distro: 'Ubuntu',
         letter: 'W',
+        share: '\\\\wsl.localhost\\Ubuntu',
         sharePath: offer.sharePath,
         ref: { kind: 'repo', id: 'repo-w' },
         name: 'repo'
       })
     )
+    expect(resolveWslMappedDrivePath).toHaveBeenCalledWith('W:\\')
     expect(openWslMoveDialogFor).not.toHaveBeenCalled()
     expect(toastError).not.toHaveBeenCalled()
   })

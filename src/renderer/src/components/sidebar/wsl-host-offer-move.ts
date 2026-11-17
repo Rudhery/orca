@@ -14,6 +14,7 @@ import type { WslMoveRowRef } from '../../../../shared/wsl-move/wsl-move-driver-
 import { openWslMoveDialogFor } from '../wsl-move/wsl-move-entry'
 import { openWslMappedDriveMove } from '../wsl-move/wsl-mapped-drive-move-store'
 import { resolveWslMappedDrivePath } from './wsl-mapped-drive-path'
+import { wslMappedDrivePathToShare } from '../../../../shared/wsl-move/wsl-drive-unc-respelling'
 import { wslMoveDistroOfPath } from '../wsl-move/wsl-move-scope-rows'
 import type { WslHostOffer } from './wsl-host-offer-actions'
 
@@ -87,11 +88,18 @@ async function moveSavedUnderMappedDrive(
   offer: WslHostOffer,
   repo: { id: string; path: string; name: string }
 ): Promise<void> {
-  const sharePath = await resolveWslMappedDrivePath(repo.path)
-  if (sharePath && wslMoveDistroOfPath(sharePath)?.toLowerCase() === offer.distro.toLowerCase()) {
+  const letter = repo.path[0]?.toUpperCase() ?? ''
+  const share = /^[A-Z]$/.test(letter) ? await resolveWslMappedDrivePath(`${letter}:\\`) : null
+  const sharePath = share ? wslMappedDrivePathToShare(repo.path, { letter, share }) : null
+  if (
+    share &&
+    sharePath &&
+    wslMoveDistroOfPath(sharePath)?.toLowerCase() === offer.distro.toLowerCase()
+  ) {
     openWslMappedDriveMove({
       distro: offer.distro,
-      letter: repo.path[0].toUpperCase(),
+      letter,
+      share,
       sharePath,
       ref: { kind: 'repo', id: repo.id },
       name: repo.name
