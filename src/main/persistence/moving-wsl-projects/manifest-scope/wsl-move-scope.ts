@@ -66,6 +66,12 @@ export function collectWslMoveScope(
   for (const repo of state.repos) {
     const paths = wslMoveMappedRepoPaths(repo, mappedDrives)
     const local = getRepoExecutionHostId(repo) === 'local'
+    const git = drives.windowsGitRefusals?.get(repo.id)
+    // Git's reason holds whatever the drive does now: it is what the user must fix.
+    if (local && (git === 'windows-git-worktrees' || git === 'windows-git-dir')) {
+      scope.refused.push({ kind: 'repo', id: repo.id, reason: git })
+      continue
+    }
     if (local && unverifiable(repo.path)) {
       scope.refused.push({ kind: 'repo', id: repo.id, reason: 'mapped-drive-unverifiable' })
       continue
@@ -74,8 +80,7 @@ export function collectWslMoveScope(
     if (!paths.some((path) => toLinux(path) !== null)) {
       continue
     }
-    const reason =
-      refusalFor(paths, toLinux, !local) ?? drives.windowsGitRefusals?.get(repo.id) ?? null
+    const reason = refusalFor(paths, toLinux, !local) ?? git ?? null
     if (reason) {
       scope.refused.push({ kind: 'repo', id: repo.id, reason })
     } else {

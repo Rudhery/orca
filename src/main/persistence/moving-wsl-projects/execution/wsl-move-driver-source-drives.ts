@@ -51,19 +51,21 @@ export async function readWslMoveSourceDrives(
 ): Promise<WslMoveSourceDrives> {
   const read = deps.driveShares
     ? await readWslMoveMappedDrives(catalog, request.distro, deps.driveShares)
-    : { mappedDrives: [], unverifiableLetters: [], unknownLetters: [] }
+    : { mappedDrives: [], unansweredDrives: [], unknownLetters: [] }
   const named = namedLetters(catalog, request) ?? []
   // An unclassified drive (an offline share, say) is this distro's to list only when picked.
   const unverifiableLetters = [
-    ...read.unverifiableLetters,
+    ...read.unansweredDrives.map((drive) => drive.letter),
     ...read.unknownLetters.filter((letter) => named.includes(letter))
   ]
+  // An unanswered drive's repos are checked through their last share, so a Git reason shows.
+  const gitDrives = [...read.mappedDrives, ...read.unansweredDrives]
   const windowsGitRefusals =
-    deps.windowsGitVerdict && read.mappedDrives.length > 0
+    deps.windowsGitVerdict && gitDrives.length > 0
       ? await findWindowsGitRefusals(
           catalog.repos,
           request.distro,
-          read.mappedDrives,
+          gitDrives,
           deps.windowsGitVerdict
         )
       : new Map<string, WslMoveScopeRefusal>()
@@ -149,4 +151,31 @@ export function wslMoveDroppedForDrives(
       )
       .map((folder) => ({ kind: 'folder' as const, id: folder.id, name: folder.name }))
   ]
+}
+
+/**
+ * `wslMoveDroppedForDrives`, less the repos the Git-for-Windows check refuses through the share
+ * the preview read: the preview showed those with Git's reason, never as moving.
+ */
+export async function wslMoveStartDroppedProjects(
+  deps: Pick<WslMoveDriverDeps, 'windowsGitVerdict'>,
+  catalog: WslMoveCatalogRows,
+  distro: string,
+  fresh: readonly WslMappedDrive[],
+  expected: readonly WslMappedDrive[],
+  moving: { repoIds: readonly string[]; folderWorkspaceIds: readonly string[] }
+): Promise<WslMoveDroppedProject[]> {
+  const dropped = wslMoveDroppedForDrives(catalog, fresh, expected, moving)
+  const repos = catalog.repos.filter((repo) =>
+    dropped.some((project) => project.kind === 'repo' && project.id === repo.id)
+  )
+  if (!deps.windowsGitVerdict || repos.length === 0) {
+    return dropped
+  }
+  const refused = await findWindowsGitRefusals(repos, distro, expected, deps.windowsGitVerdict)
+  const gitReason = (id: string): boolean => {
+    const reason = refused.get(id)
+    return reason === 'windows-git-worktrees' || reason === 'windows-git-dir'
+  }
+  return dropped.filter((project) => project.kind !== 'repo' || !gitReason(project.id))
 }

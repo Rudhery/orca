@@ -125,3 +125,37 @@ describe('a whole-distro start whose previewed drive now points elsewhere', () =
     })
   })
 })
+
+describe('a repo the Git-for-Windows check refuses', () => {
+  beforeEach(() => {
+    rig.world.repos = [project('repo-1', UNC), project('repo-w', 'W:\\home\\dev\\other')]
+    rig.world.deps.windowsGitVerdict = async (path) =>
+      path.endsWith('other') ? 'windows-git-worktrees' : 'ok'
+  })
+
+  it('shows Git’s reason even while its drive does not answer', async () => {
+    shares = { W: 'unverifiable' }
+    const preview = await previewWslMove(rig.world.deps, { distro: 'Ubuntu' })
+    expect(preview.outcome === 'ready' ? preview.refused : null).toEqual([
+      { kind: 'repo', id: 'repo-w', reason: 'windows-git-worktrees' }
+    ])
+  })
+
+  it('is not named as left behind when its drive points elsewhere at start', async () => {
+    rig.world.repos.push({
+      ...project('repo-w2', 'W:\\home\\dev\\movable'),
+      displayName: 'movable'
+    })
+    const preview = await previewWslMove(rig.world.deps, { distro: 'Ubuntu' })
+    expect(preview).toMatchObject({ outcome: 'ready', mappedDrives: [W] })
+    shares = { W: { share: '\\\\wsl.localhost\\Debian' } }
+    const result = await moveProjectsToWslHost(rig.world.deps, {
+      distro: 'Ubuntu',
+      mappedDrives: preview.outcome === 'ready' ? (preview.mappedDrives ?? []) : []
+    })
+    expect(result).toMatchObject({
+      outcome: 'moved',
+      droppedForMappedDrives: [{ kind: 'repo', id: 'repo-w2', name: 'movable' }]
+    })
+  })
+})

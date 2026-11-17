@@ -18,8 +18,8 @@ import type { WslMappedDrive } from '../../../../shared/wsl-move/wsl-mapped-driv
 import {
   journaledWslMoveDrives,
   readWslMoveSourceDrives,
-  wslMoveDroppedForDrives,
-  wslMoveStartDriveRefusal
+  wslMoveStartDriveRefusal,
+  wslMoveStartDroppedProjects
 } from './wsl-move-driver-source-drives'
 import { listWslMoveCutoverChain } from '../cutover-recovery/wsl-move-cutover-journal'
 
@@ -303,7 +303,14 @@ export async function prepareWslMove(
     return changedDrives
   }
   const droppedForDrives = expectedMappedDrives
-    ? wslMoveDroppedForDrives(catalog, drives.mappedDrives, expectedMappedDrives, plan)
+    ? await wslMoveStartDroppedProjects(
+        deps,
+        catalog,
+        request.distro,
+        drives.mappedDrives,
+        expectedMappedDrives,
+        plan
+      )
     : []
   const scope: WslMoveTerminalScope = {
     workspaceIds: exported.workspaceIds,

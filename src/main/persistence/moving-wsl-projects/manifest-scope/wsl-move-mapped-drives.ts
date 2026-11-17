@@ -23,8 +23,8 @@ export type WslMoveDriveShares = {
 
 export type WslMoveMappedDrivesRead = {
   mappedDrives: WslMappedDrive[]
-  /** Letters last known to map into this distro that Windows did not answer for now. */
-  unverifiableLetters: string[]
+  /** Drives last known to map into this distro, with that share, that didn't answer now. */
+  unansweredDrives: WslMappedDrive[]
   /** Letters never classified (the lookup timed out): they may map anywhere, or nowhere. */
   unknownLetters: string[]
 }
@@ -48,7 +48,11 @@ export function wslMoveDriveLettersInUse(rows: {
   return [...letters].sort()
 }
 
-type LetterRead = { mapped: WslMappedDrive } | 'unverifiable' | 'unknown' | 'elsewhere'
+type LetterRead =
+  | { mapped: WslMappedDrive }
+  | { unanswered: WslMappedDrive }
+  | 'unknown'
+  | 'elsewhere'
 
 async function readLetter(
   letter: string,
@@ -65,7 +69,9 @@ async function readLetter(
   const read = await shares.readNow(letter).catch((): WslMappedDriveRead => 'unverifiable')
   if (read === 'unverifiable') {
     // Last known in another distro: its projects aren't this move's to list.
-    return wslMappedDriveMatches(known.share, distro, undefined) ? 'unverifiable' : 'elsewhere'
+    return wslMappedDriveMatches(known.share, distro, undefined)
+      ? { unanswered: { letter, share: known.share } }
+      : 'elsewhere'
   }
   return wslMappedDriveMatches(read.share, distro, undefined)
     ? { mapped: { letter, share: read.share } }
@@ -83,11 +89,11 @@ export async function readWslMoveMappedDrives(
   )
   return {
     mappedDrives: reads.flatMap(({ read }) =>
-      typeof read === 'object' ? [{ ...read.mapped }] : []
+      typeof read === 'object' && 'mapped' in read ? [{ ...read.mapped }] : []
     ),
-    unverifiableLetters: reads
-      .filter(({ read }) => read === 'unverifiable')
-      .map(({ letter }) => letter),
+    unansweredDrives: reads.flatMap(({ read }) =>
+      typeof read === 'object' && 'unanswered' in read ? [{ ...read.unanswered }] : []
+    ),
     unknownLetters: reads.filter(({ read }) => read === 'unknown').map(({ letter }) => letter)
   }
 }
