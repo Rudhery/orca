@@ -225,4 +225,31 @@ describe('fresh reads and last-known answers', () => {
     )
     expect(wslMappedDriveLastKnownShare('w')).toEqual({ share: '\\\\wsl.localhost\\Ubuntu' })
   })
+
+  it('remembers a drive that fails to resolve as mapping nowhere', async () => {
+    const missing = async (): Promise<string> => {
+      throw new Error('ENOENT')
+    }
+    await classifyWslMappedDrive('E', deps(missing))
+    expect(wslMappedDriveLastKnownShare('E')).toEqual({ share: null })
+    await readWslMappedDriveShareNow('U', deps(missing))
+    expect(wslMappedDriveLastKnownShare('U')).toEqual({ share: null })
+  })
+
+  it('classifies a letter again once its answer is a minute old, so a remap is seen', async () => {
+    let now = 0
+    const realpathRoot = vi
+      .fn<WslMappedDriveShareDeps['realpathRoot']>()
+      .mockResolvedValueOnce('Z:\\')
+      .mockResolvedValueOnce('\\\\wsl.localhost\\Ubuntu\\')
+    const clock = deps(realpathRoot, { now: () => now })
+    await expect(classifyWslMappedDrive('Z', clock)).resolves.toEqual({ share: null })
+    now = 30_000
+    await expect(classifyWslMappedDrive('Z', clock)).resolves.toEqual({ share: null })
+    now = 61_000
+    await expect(classifyWslMappedDrive('Z', clock)).resolves.toEqual({
+      share: '\\\\wsl.localhost\\Ubuntu'
+    })
+    expect(realpathRoot).toHaveBeenCalledTimes(2)
+  })
 })

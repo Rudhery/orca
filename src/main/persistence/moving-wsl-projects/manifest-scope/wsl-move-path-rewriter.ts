@@ -1,27 +1,39 @@
 // Convert only the moved distro's UNC and mapped-drive paths; unrelated paths remain unchanged.
 import {
+  wslMappedDriveComparisonKeyToLinux,
   wslMappedDriveFileUrlToLinux,
   wslMoveSourcePathToLinux,
   type WslMappedDrive
 } from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
 import type { OrcadMigrationPathRewriter } from '../../migrating-orcad-catalog/path-rewrite/orcad-migration-path-rewrite'
 
+export type UncToLinuxRewriteOptions = {
+  /** Told each drive letter a rewrite mapped, so a move journals only the drives it names. */
+  onMappedDrive?: (letter: string) => void
+  /** The moved roots in Linux form: a folded `w:/…` key takes back their case. */
+  linuxRoots?: readonly string[]
+}
+
 export function createUncToLinuxPathRewriter(
   distro: string,
   mappedDrives: readonly WslMappedDrive[] = [],
-  /** Told each drive letter a rewrite mapped, so a move journals only the drives it names. */
-  onMappedDrive?: (letter: string) => void
+  options: UncToLinuxRewriteOptions = {}
 ): OrcadMigrationPathRewriter {
   const fileUrl = new RegExp(`^file://(?:wsl\\.localhost|wsl\\$)/([^/]+)(/.*)?$`, 'i')
   const noted = (value: string, mapped: string | null): string | null => {
     const letter = mapped === null ? null : DRIVE_LETTER.exec(value)?.[1]
     if (letter) {
-      onMappedDrive?.(letter.toUpperCase())
+      options.onMappedDrive?.(letter.toUpperCase())
     }
     return mapped
   }
   const toLinux = (value: string): string | null =>
-    noted(value, wslMoveSourcePathToLinux(value, distro, mappedDrives))
+    noted(
+      value,
+      (options.linuxRoots &&
+        wslMappedDriveComparisonKeyToLinux(value, distro, mappedDrives, options.linuxRoots)) ??
+        wslMoveSourcePathToLinux(value, distro, mappedDrives)
+    )
   return {
     path: (value, form) => {
       switch (form) {

@@ -1,7 +1,7 @@
 /**
- * The mapped drives a move plans with: read fresh at preview, and at start again, refusing when
- * the drives the selection names differ from what the preview showed (the start request carries
- * them back). With them, the mapped-drive repos the host's Git can't take, which the plan refuses.
+ * The mapped drives a move plans with: read fresh at preview, and at start again. The start then
+ * refuses when the drives its own planned rows name differ from what the preview showed (the start
+ * request carries them back). With them, the mapped-drive repos the host's Git can't take.
  */
 import {
   WSL_MOVE_MAPPED_DRIVE_UNVERIFIABLE_DETAIL,
@@ -25,16 +25,18 @@ export type WslMoveSourceDrives = Required<WslMoveScopeDrives> & {
   windowsGitRefusals: ReadonlyMap<string, WslMoveScopeRefusal>
 }
 
-/** The letters the request's rows name; every local row's when it names none. */
-function requestedLetters(
+/** The letters of the rows a request names; null when it names none (the whole distro). */
+function namedLetters(
   catalog: WslMoveCatalogRows,
   request: Pick<WslMoveRequest, 'repoIds' | 'folderWorkspaceIds'>
-): string[] {
-  const whole = !request.repoIds && !request.folderWorkspaceIds
+): string[] | null {
+  if (!request.repoIds && !request.folderWorkspaceIds) {
+    return null
+  }
   return wslMoveDriveLettersInUse({
-    repos: catalog.repos.filter((repo) => whole || request.repoIds?.includes(repo.id)),
-    folderWorkspaces: catalog.folderWorkspaces.filter(
-      (folder) => whole || request.folderWorkspaceIds?.includes(folder.id)
+    repos: catalog.repos.filter((repo) => request.repoIds?.includes(repo.id)),
+    folderWorkspaces: catalog.folderWorkspaces.filter((folder) =>
+      request.folderWorkspaceIds?.includes(folder.id)
     )
   })
 }
@@ -42,31 +44,17 @@ function requestedLetters(
 export async function readWslMoveSourceDrives(
   deps: Pick<WslMoveDriverDeps, 'driveShares' | 'windowsGitVerdict'>,
   catalog: WslMoveCatalogRows,
-  request: WslMoveRequest,
-  /** At start: the drives the preview showed. Null for a preview. */
-  expected: readonly WslMappedDrive[] | null
-): Promise<WslMoveSourceDrives | WslMoveRefusal> {
+  request: WslMoveRequest
+): Promise<WslMoveSourceDrives> {
   const read = deps.driveShares
     ? await readWslMoveMappedDrives(catalog, request.distro, deps.driveShares)
-    : { mappedDrives: [], unverifiableLetters: [] }
-  if (expected) {
-    // Only drives this selection names count: an unrelated W: never stops a UNC-only start.
-    const relevant = new Set([
-      ...expected.map((drive) => drive.letter.toUpperCase()),
-      ...requestedLetters(catalog, request)
-    ])
-    if (read.unverifiableLetters.some((letter) => relevant.has(letter))) {
-      return {
-        outcome: 'refused',
-        code: 'wsl_move_unavailable',
-        detail: WSL_MOVE_MAPPED_DRIVE_UNVERIFIABLE_DETAIL
-      }
-    }
-    const fresh = read.mappedDrives.filter((drive) => relevant.has(drive.letter.toUpperCase()))
-    if (!sameWslMappedDrives(expected, fresh)) {
-      return { outcome: 'refused', code: 'wsl_move_scope_changed', detail: 'mapped-drives-changed' }
-    }
-  }
+    : { mappedDrives: [], unverifiableLetters: [], unknownLetters: [] }
+  const named = namedLetters(catalog, request) ?? []
+  // An unclassified drive (an offline share, say) is this distro's to list only when picked.
+  const unverifiableLetters = [
+    ...read.unverifiableLetters,
+    ...read.unknownLetters.filter((letter) => named.includes(letter))
+  ]
   const windowsGitRefusals =
     deps.windowsGitVerdict && read.mappedDrives.length > 0
       ? await findWindowsGitRefusals(
@@ -76,7 +64,7 @@ export async function readWslMoveSourceDrives(
           deps.windowsGitVerdict
         )
       : new Map<string, WslMoveScopeRefusal>()
-  return { ...read, windowsGitRefusals }
+  return { mappedDrives: read.mappedDrives, unverifiableLetters, windowsGitRefusals }
 }
 
 /** The drives a move journals: only those its exported paths named, so a UNC move stays v1. */
@@ -89,4 +77,36 @@ export function journaledWslMoveDrives(
   }
   const named = new Set(exportedLetters)
   return mappedDrives.filter((drive) => named.has(drive.letter.toUpperCase()))
+}
+
+/**
+ * At start: the drives this start will journal, and those of the rows it names, must map where
+ * the preview showed. Hidden, retained, refused or unrelated rows never count.
+ */
+export function wslMoveStartDriveRefusal(
+  catalog: WslMoveCatalogRows,
+  request: WslMoveRequest,
+  drives: Pick<WslMoveSourceDrives, 'mappedDrives' | 'unverifiableLetters'>,
+  journaled: readonly WslMappedDrive[],
+  expected: readonly WslMappedDrive[]
+): WslMoveRefusal | null {
+  const named = namedLetters(catalog, request)
+  // A drive the preview showed, or one a picked row uses, that no longer answers.
+  const needed = new Set([...expected.map((drive) => drive.letter.toUpperCase()), ...(named ?? [])])
+  if (drives.unverifiableLetters.some((letter) => needed.has(letter))) {
+    return {
+      outcome: 'refused',
+      code: 'wsl_move_unavailable',
+      detail: WSL_MOVE_MAPPED_DRIVE_UNVERIFIABLE_DETAIL
+    }
+  }
+  const relevant = new Set([
+    ...journaled.map((drive) => drive.letter.toUpperCase()),
+    ...(named ?? [])
+  ])
+  const only = (list: readonly WslMappedDrive[]): WslMappedDrive[] =>
+    list.filter((drive) => relevant.has(drive.letter.toUpperCase()))
+  return sameWslMappedDrives(only(expected), only(drives.mappedDrives))
+    ? null
+    : { outcome: 'refused', code: 'wsl_move_scope_changed', detail: 'mapped-drives-changed' }
 }

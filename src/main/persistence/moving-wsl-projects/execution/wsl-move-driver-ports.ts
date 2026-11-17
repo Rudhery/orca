@@ -80,7 +80,11 @@ export type WslMoveDriverDeps = {
   /** What drive letters map to; absent off Windows, where no drive is mapped. */
   driveShares?: WslMoveDriveShares
   /** Whether the host's Git can take a mapped-drive repo, read through its share path. */
-  windowsGitVerdict?: (readablePath: string, distro: string) => Promise<WslMoveWindowsGitVerdict>
+  windowsGitVerdict?: (
+    readablePath: string,
+    distro: string,
+    signal?: AbortSignal
+  ) => Promise<WslMoveWindowsGitVerdict>
   /** Busy, working, automation and dispatch facts for the scope, from their owning stores. */
   gateInputs: (scope: WslMoveTerminalScope) => Promise<WslMoveGateInputs>
   /** The panes the scope's live terminals belong to; read before Sleep ends their sessions. */

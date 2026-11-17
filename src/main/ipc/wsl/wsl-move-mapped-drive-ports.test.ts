@@ -55,3 +55,10 @@ describe('the prune check’s mapped drives', () => {
     expect(realpathNative).not.toHaveBeenCalled()
   })
 })
+
+describe('the prune check off Windows', () => {
+  it('treats drive letters as outside WSL off Windows', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
+    expect(wslMoveDistroMappedDrivesLastKnown(store, 'Ubuntu')).toEqual([])
+  })
+})

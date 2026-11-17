@@ -24,10 +24,12 @@ type CacheEntry = { settledAt: number | null; lookup: Promise<string | null> }
 
 const cache = new Map<string, CacheEntry>()
 // Each letter's last settled answer from either lookup; background paths read only this.
-const lastKnown = new Map<string, string | null>()
+const lastKnown = new Map<string, { share: string | null; at: number }>()
 
 const defaultDeps: WslMappedDriveShareDeps = {
-  platform: process.platform,
+  get platform() {
+    return process.platform
+  },
   // The native call asks Windows for the final path; the JS one keeps the drive letter.
   realpathRoot: (root) =>
     new Promise((resolve, reject) =>
@@ -59,10 +61,11 @@ function startDriveLookup(key: string, deps: WslMappedDriveShareDeps): CacheEntr
   entry.lookup = deps.realpathRoot(`${key}:\\`).then(
     (real) => {
       entry.settledAt = deps.now()
-      return remember(key, real)
+      return remember(key, real, deps.now())
     },
     () => {
-      // A failed lookup is asked again by the next add.
+      // Maps nowhere for now (no such drive, a disconnected share); the next add asks again.
+      remember(key, null, deps.now())
       if (cache.get(key) === entry) {
         cache.delete(key)
       }
@@ -103,10 +106,37 @@ export async function resolveWslMappedDrivePath(
 /** What a drive letter maps to right now; `unverifiable` when Windows didn't answer in time. */
 export type WslMappedDriveRead = { share: string | null } | 'unverifiable'
 
-function remember(key: string, real: string): string | null {
-  const share = parseWslUncPath(real) ? real.replace(/[\\/]+$/, '') : null
-  lastKnown.set(key, share)
+function remember(key: string, real: string | null, at: number): string | null {
+  const share = real && parseWslUncPath(real) ? real.replace(/[\\/]+$/, '') : null
+  lastKnown.set(key, { share, at })
+  answerSink?.(wslMappedDriveAnswers())
   return share
+}
+
+/** A letter's settled answer: the share it maps to (null: nowhere), and when it was read. */
+export type WslMappedDriveAnswer = { letter: string; share: string | null; at: number }
+
+// Told every settled answer, so a restart knows a drive without reading it.
+let answerSink: ((answers: WslMappedDriveAnswer[]) => void) | null = null
+
+export function setWslMappedDriveAnswerSink(
+  sink: ((answers: WslMappedDriveAnswer[]) => void) | null
+): void {
+  answerSink = sink
+}
+
+export function wslMappedDriveAnswers(): WslMappedDriveAnswer[] {
+  return [...lastKnown].map(([letter, known]) => ({ letter, ...known }))
+}
+
+/** Seeds answers read from disk; one already settled in this run is newer and wins. */
+export function seedWslMappedDriveAnswers(answers: readonly WslMappedDriveAnswer[]): void {
+  for (const { letter, share, at } of answers) {
+    const key = letter.toUpperCase()
+    if (!lastKnown.has(key)) {
+      lastKnown.set(key, { share, at })
+    }
+  }
 }
 
 type FreshLookup = { serial: number; settled: Promise<{ share: string | null }> }
@@ -118,9 +148,9 @@ function startFreshLookup(key: string, deps: WslMappedDriveShareDeps): FreshLook
   const entry: FreshLookup = {
     serial: ++freshSerial,
     settled: deps.realpathRoot(`${key}:\\`).then(
-      (real) => ({ share: remember(key, real) }),
+      (real) => ({ share: remember(key, real, deps.now()) }),
       // No such drive, or not one Windows can resolve: nothing is mapped there.
-      () => ({ share: null })
+      () => ({ share: remember(key, null, deps.now()) })
     )
   }
   freshLookups.set(key, entry)
@@ -171,10 +201,17 @@ export async function readWslMappedDriveShareNow(
   return Promise.race([answer, timeout]).finally(() => clearTimeout(timer))
 }
 
-/** The letter's last answer, never read here; null before any lookup of it settled. */
-export function wslMappedDriveLastKnownShare(letter: string): { share: string | null } | null {
-  const key = letter.toUpperCase()
-  return lastKnown.has(key) ? { share: lastKnown.get(key) ?? null } : null
+/**
+ * The letter's last answer, never read here; null before any lookup of it settled, or when the
+ * answer is older than `maxAgeMs`. Background readers take any age: they never read a drive.
+ */
+export function wslMappedDriveLastKnownShare(
+  letter: string,
+  maxAgeMs = Number.POSITIVE_INFINITY,
+  now: number = Date.now()
+): { share: string | null } | null {
+  const known = lastKnown.get(letter.toUpperCase())
+  return known && now - known.at < maxAgeMs ? { share: known.share } : null
 }
 
 /**
@@ -188,12 +225,13 @@ export async function classifyWslMappedDrive(
   if (deps.platform !== 'win32' || !/^[A-Za-z]$/.test(letter)) {
     return { share: null }
   }
-  const known = wslMappedDriveLastKnownShare(letter)
+  // A minute, as the cache: a remap after that is classified again.
+  const known = wslMappedDriveLastKnownShare(letter, CACHE_TTL_MS, deps.now())
   if (known) {
     return known
   }
   await resolveDriveShare(letter, deps)
-  return wslMappedDriveLastKnownShare(letter)
+  return wslMappedDriveLastKnownShare(letter, CACHE_TTL_MS, deps.now())
 }
 
 /**
@@ -216,5 +254,6 @@ export function wslMappedDriveMatches(
 export function clearWslMappedDriveShareCacheForTests(): void {
   cache.clear()
   lastKnown.clear()
+  answerSink = null
   freshLookups.clear()
 }

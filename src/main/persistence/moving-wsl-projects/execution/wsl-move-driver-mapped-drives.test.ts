@@ -107,17 +107,29 @@ describe('moving a project saved under a mapped drive', () => {
     expect(listWslMoveCutovers(rig.userDataPath)).toEqual([])
   })
 
-  it('lists the projects of a drive that does not answer as not moving, and moves the rest', async () => {
-    // An offline share elsewhere must not block moving the distro's other projects.
+  it('lists an unanswered drive’s projects only where it last mapped here, or when picked', async () => {
     rig.world.repos = [
       rig.world.repos[0],
-      { ...rig.world.repos[0], id: 'repo-s', path: 'S:\\shared\\tool' }
+      { ...rig.world.repos[0], id: 'repo-s', path: 'S:\\shared\\tool' },
+      { ...rig.world.repos[0], id: 'repo-v', path: 'V:\\home\\dev\\v' }
     ]
-    expect(await previewWslMove(rig.world.deps, { distro: 'Ubuntu' })).toMatchObject({
-      outcome: 'ready',
-      repoIds: ['repo-1'],
-      mappedDrives: [W],
-      refused: [{ kind: 'repo', id: 'repo-s', reason: 'mapped-drive-unverifiable' }]
+    // S: never answered (an offline share anywhere); V: last mapped into this distro.
+    known.V = '\\\\wsl.localhost\\Ubuntu'
+    shares.V = 'unverifiable'
+    const whole = await previewWslMove(rig.world.deps, { distro: 'Ubuntu' })
+    expect(whole).toMatchObject({ outcome: 'ready', repoIds: ['repo-1'], mappedDrives: [W] })
+    expect(whole.outcome === 'ready' ? whole.refused : null).toEqual([
+      { kind: 'repo', id: 'repo-v', reason: 'mapped-drive-unverifiable' }
+    ])
+    const picked = await previewWslMove(rig.world.deps, {
+      distro: 'Ubuntu',
+      repoIds: ['repo-1', 'repo-s'],
+      folderWorkspaceIds: []
+    })
+    expect(picked.outcome === 'ready' ? picked.refused : null).toContainEqual({
+      kind: 'repo',
+      id: 'repo-s',
+      reason: 'mapped-drive-unverifiable'
     })
   })
 

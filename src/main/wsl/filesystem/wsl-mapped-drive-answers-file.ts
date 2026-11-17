@@ -1,0 +1,77 @@
+/**
+ * Each drive letter's last settled answer (the WSL share it maps to, or nowhere), kept across
+ * launches. Background paths (the move prune, an unreadable journal's fence) only ever read these:
+ * reading a mapped share can boot its stopped distro, so they never ask Windows themselves.
+ */
+import { join } from 'node:path'
+import { z } from 'zod'
+import { readNodeFileSyncWithinLimit } from '../../../shared/file-content/node-bounded-file-reader'
+import { parseWslUncPath } from '../../../shared/file-access/wsl-paths'
+import { durableWriteTempPath, writeFileDurable } from '../../filesystem/durable-file-write'
+import {
+  seedWslMappedDriveAnswers,
+  setWslMappedDriveAnswerSink,
+  type WslMappedDriveAnswer
+} from './wsl-mapped-drive-share'
+
+const FILE_NAME = 'wsl-mapped-drive-answers.json'
+const MAX_FILE_BYTES = 64 * 1024
+
+const AnswersSchema = z.object({
+  version: z.literal(1),
+  answers: z
+    .array(
+      z.object({
+        letter: z.string().regex(/^[A-Z]$/),
+        share: z
+          .string()
+          .max(4_096)
+          .refine((share) => parseWslUncPath(share) !== null)
+          .nullable(),
+        at: z.number().finite()
+      })
+    )
+    .max(26)
+})
+
+export function wslMappedDriveAnswersPath(userDataPath: string): string {
+  return join(userDataPath, FILE_NAME)
+}
+
+/**
+ * Seeds the answers saved by earlier launches, then saves every new one. Reads only this file;
+ * a missing or malformed file leaves every letter unknown.
+ */
+export function loadWslMappedDriveAnswers(userDataPath: string): { saved: () => Promise<void> } {
+  const path = wslMappedDriveAnswersPath(userDataPath)
+  try {
+    const raw = readNodeFileSyncWithinLimit(path, MAX_FILE_BYTES).buffer.toString('utf8')
+    const parsed = AnswersSchema.safeParse(JSON.parse(raw))
+    if (parsed.success) {
+      seedWslMappedDriveAnswers(parsed.data.answers)
+    }
+  } catch {
+    // No answers saved yet, or unreadable: unknown letters stay unknown.
+  }
+  let writing: Promise<void> = Promise.resolve()
+  let pending: WslMappedDriveAnswer[] | null = null
+  setWslMappedDriveAnswerSink((answers) => {
+    // Writes run one at a time; a burst of answers saves only the newest set.
+    const queued = pending !== null
+    pending = answers
+    if (queued) {
+      return
+    }
+    writing = writing
+      .then(async () => {
+        const latest = pending ?? []
+        pending = null
+        const body = JSON.stringify({ version: 1, answers: latest })
+        await writeFileDurable(durableWriteTempPath(path), path, body, 0o600)
+      })
+      .catch((error: unknown) => {
+        console.warn('[wsl] Could not save mapped-drive answers:', error)
+      })
+  })
+  return { saved: () => writing }
+}

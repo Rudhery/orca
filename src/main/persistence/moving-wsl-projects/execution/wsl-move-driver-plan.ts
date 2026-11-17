@@ -14,7 +14,11 @@ import {
 } from '../../../../shared/wsl-move/wsl-move-cutover'
 import { wslHostsAcceptNewWork } from '../../../wsl/host-lifecycle/wsl-host-gate'
 import type { WslMappedDrive } from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
-import { journaledWslMoveDrives, readWslMoveSourceDrives } from './wsl-move-driver-source-drives'
+import {
+  journaledWslMoveDrives,
+  readWslMoveSourceDrives,
+  wslMoveStartDriveRefusal
+} from './wsl-move-driver-source-drives'
 import { listWslMoveCutoverChain } from '../cutover-recovery/wsl-move-cutover-journal'
 
 import { type WslMovePlan, planWslMove } from '../manifest-scope/wsl-move-delta-plan'
@@ -238,10 +242,7 @@ export async function prepareWslMove(
       ? { repoIds: request.repoIds ?? [], folderWorkspaceIds: request.folderWorkspaceIds ?? [] }
       : undefined
   const catalog = deps.readCatalog()
-  const drives = await readWslMoveSourceDrives(deps, catalog, request, expectedMappedDrives)
-  if ('outcome' in drives) {
-    return drives
-  }
+  const drives = await readWslMoveSourceDrives(deps, catalog, request)
   const planned = planWslMove(
     deps.userDataPath,
     catalog,
@@ -251,7 +252,13 @@ export async function prepareWslMove(
     drives
   )
   if (planned.outcome === 'refused') {
-    return refusal(planned.code, planned.refused?.length ? { refused: planned.refused } : {})
+    // A picked project whose drive moved since the preview is a changed scope, not "nothing new".
+    const changed =
+      expectedMappedDrives &&
+      wslMoveStartDriveRefusal(catalog, request, drives, [], expectedMappedDrives)
+    return (
+      changed || refusal(planned.code, planned.refused?.length ? { refused: planned.refused } : {})
+    )
   }
   let { plan } = planned
   // A delta goes to the host its chain already moved into; another host would split the projects.
@@ -278,6 +285,18 @@ export async function prepareWslMove(
       return refusal('wsl_move_scope_changed')
     }
     throw error
+  }
+  const changedDrives =
+    expectedMappedDrives &&
+    wslMoveStartDriveRefusal(
+      catalog,
+      request,
+      drives,
+      plan.mappedDrives ?? [],
+      expectedMappedDrives
+    )
+  if (changedDrives) {
+    return changedDrives
   }
   const scope: WslMoveTerminalScope = {
     workspaceIds: exported.workspaceIds,

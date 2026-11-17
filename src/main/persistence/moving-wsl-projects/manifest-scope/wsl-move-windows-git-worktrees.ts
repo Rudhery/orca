@@ -29,10 +29,30 @@ export type WslMoveWindowsGitVerdict =
 // Long enough for a cold distro share; a repo whose records don't answer by then stays here.
 const GIT_RECORDS_TIMEOUT_MS = 5_000
 
+// Records read at once: enough for many worktrees, few enough not to flood a slow share.
+const RECORD_READS_AT_ONCE = 8
+
 const isWindowsLink = (link: string): boolean => isForeignLink(link, true)
 
+function errorCode(error: unknown): unknown {
+  return error instanceof Error && 'code' in error ? error.code : undefined
+}
+
 function isMissing(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+  return errorCode(error) === 'ENOENT'
+}
+
+/** A worktree record's link; null for an entry Git itself ignores or prunes (no `gitdir`). */
+async function recordLink(entry: string, signal: AbortSignal | undefined): Promise<string | null> {
+  try {
+    return (await readFile(join(entry, 'gitdir'), { encoding: 'utf8', signal })).trim()
+  } catch (error) {
+    // A stray file in `worktrees/` (ENOTDIR) or an entry with no `gitdir` (ENOENT).
+    if (isMissing(error) || errorCode(error) === 'ENOTDIR') {
+      return null
+    }
+    throw error
+  }
 }
 
 async function statOrNull(path: string): Promise<Stats | null> {
@@ -52,7 +72,8 @@ function readable(base: string, link: string, distro: string): string {
 /** The repo's common Git directory, null outside Git, or the Windows-link verdict. */
 async function commonDirOf(
   repoPath: string,
-  distro: string
+  distro: string,
+  signal: AbortSignal | undefined
 ): Promise<{ commonDir: string } | null | 'windows-git-dir'> {
   const dotGit = join(repoPath, '.git')
   const info = await statOrNull(dotGit)
@@ -64,7 +85,9 @@ async function commonDirOf(
   if (info.isDirectory()) {
     return { commonDir: dotGit }
   }
-  const link = /^gitdir:\s*(.+)$/m.exec(await readFile(dotGit, 'utf8'))?.[1]?.trim()
+  const link = /^gitdir:\s*(.+)$/m
+    .exec(await readFile(dotGit, { encoding: 'utf8', signal }))?.[1]
+    ?.trim()
   if (!link) {
     throw new Error('git_link_unreadable')
   }
@@ -72,7 +95,7 @@ async function commonDirOf(
     return 'windows-git-dir'
   }
   const gitDir = readable(repoPath, link, distro)
-  const common = await readFile(join(gitDir, 'commondir'), 'utf8').then(
+  const common = await readFile(join(gitDir, 'commondir'), { encoding: 'utf8', signal }).then(
     (text) => text.trim(),
     (error: unknown) => {
       // No `commondir`: a separate Git folder, which is its own common directory.
@@ -91,9 +114,12 @@ async function commonDirOf(
 /** `repoPath` in a spelling this process reads (the share's, for a mapped drive). */
 export async function windowsGitWorktreeVerdict(
   repoPath: string,
-  distro: string
+  distro: string,
+  /** Aborted at the check's timeout: pending reads stop, and no further one starts. */
+  signal?: AbortSignal
 ): Promise<WslMoveWindowsGitVerdict> {
-  const found = await commonDirOf(repoPath, distro)
+  const found = await commonDirOf(repoPath, distro, signal)
+  signal?.throwIfAborted()
   if (found === null || found === 'windows-git-dir') {
     return found ?? 'ok'
   }
@@ -104,25 +130,35 @@ export async function windowsGitWorktreeVerdict(
     }
     throw error
   })
-  for (const entry of entries) {
+  for (let start = 0; start < entries.length; start += RECORD_READS_AT_ONCE) {
+    signal?.throwIfAborted()
     // An unreadable record fails the check: it may be one the host's prune would delete.
-    const link = (await readFile(join(admin, entry, 'gitdir'), 'utf8')).trim()
-    if (isWindowsLink(link)) {
+    const links = await Promise.all(
+      entries
+        .slice(start, start + RECORD_READS_AT_ONCE)
+        .map((entry) => recordLink(join(admin, entry), signal))
+    )
+    if (links.some((link) => link !== null && isWindowsLink(link))) {
       return 'windows-git-worktrees'
     }
   }
   return 'ok'
 }
 
+/** Stops waiting at the timeout, and aborts the reads that support it; a hung stat is left. */
 async function verdictWithin(
-  check: () => Promise<WslMoveWindowsGitVerdict>,
+  check: (signal: AbortSignal) => Promise<WslMoveWindowsGitVerdict>,
   timeoutMs: number
 ): Promise<WslMoveWindowsGitVerdict | 'git-unreadable'> {
+  const controller = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<'git-unreadable'>((done) => {
-    timer = setTimeout(() => done('git-unreadable'), timeoutMs)
+    timer = setTimeout(() => {
+      controller.abort()
+      done('git-unreadable')
+    }, timeoutMs)
   })
-  const verdict = check().catch((): 'git-unreadable' => 'git-unreadable')
+  const verdict = check(controller.signal).catch((): 'git-unreadable' => 'git-unreadable')
   return Promise.race([verdict, timeout]).finally(() => clearTimeout(timer))
 }
 
@@ -131,7 +167,11 @@ export async function findWindowsGitRefusals(
   repos: readonly Repo[],
   distro: string,
   mappedDrives: readonly WslMappedDrive[],
-  check: (readablePath: string, distro: string) => Promise<WslMoveWindowsGitVerdict>,
+  check: (
+    readablePath: string,
+    distro: string,
+    signal: AbortSignal
+  ) => Promise<WslMoveWindowsGitVerdict>,
   timeoutMs = GIT_RECORDS_TIMEOUT_MS
 ): Promise<Map<string, WslMoveScopeRefusal>> {
   const onMappedDrive = repos.filter(
@@ -140,7 +180,10 @@ export async function findWindowsGitRefusals(
   const verdicts = await Promise.all(
     onMappedDrive.map(async (repo) => {
       const sharePath = toWslDistroUncPath(repo.path, mappedDrives)
-      return [repo.id, await verdictWithin(() => check(sharePath, distro), timeoutMs)] as const
+      return [
+        repo.id,
+        await verdictWithin((signal) => check(sharePath, distro, signal), timeoutMs)
+      ] as const
     })
   )
   const refusals = new Map<string, WslMoveScopeRefusal>()

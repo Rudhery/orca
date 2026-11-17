@@ -23,8 +23,10 @@ export type WslMoveDriveShares = {
 
 export type WslMoveMappedDrivesRead = {
   mappedDrives: WslMappedDrive[]
-  /** Letters local projects use that may map into this distro, but Windows did not answer for. */
+  /** Letters last known to map into this distro that Windows did not answer for now. */
   unverifiableLetters: string[]
+  /** Letters never classified (the lookup timed out): they may map anywhere, or nowhere. */
+  unknownLetters: string[]
 }
 
 const DRIVE_PATH = /^([A-Za-z]):[\\/]/
@@ -46,7 +48,7 @@ export function wslMoveDriveLettersInUse(rows: {
   return [...letters].sort()
 }
 
-type LetterRead = { mapped: WslMappedDrive } | 'unverifiable' | 'elsewhere'
+type LetterRead = { mapped: WslMappedDrive } | 'unverifiable' | 'unknown' | 'elsewhere'
 
 async function readLetter(
   letter: string,
@@ -55,7 +57,7 @@ async function readLetter(
 ): Promise<LetterRead> {
   const known = await shares.classify(letter).catch(() => null)
   if (known === null) {
-    return 'unverifiable'
+    return 'unknown'
   }
   if (known.share === null || !parseWslUncPath(known.share)) {
     return 'elsewhere'
@@ -85,6 +87,7 @@ export async function readWslMoveMappedDrives(
     ),
     unverifiableLetters: reads
       .filter(({ read }) => read === 'unverifiable')
-      .map(({ letter }) => letter)
+      .map(({ letter }) => letter),
+    unknownLetters: reads.filter(({ read }) => read === 'unknown').map(({ letter }) => letter)
   }
 }

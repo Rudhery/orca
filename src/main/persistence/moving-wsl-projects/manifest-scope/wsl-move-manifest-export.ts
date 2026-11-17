@@ -173,9 +173,9 @@ export function exportWslMoveManifest(
     ? { ...inspection.payload, workspaceSession }
     : inspection.payload
   const usedLetters = new Set<string>()
-  const rewriter = createUncToLinuxPathRewriter(request.distro, request.mappedDrives, (letter) =>
-    usedLetters.add(letter)
-  )
+  const rewriter = createUncToLinuxPathRewriter(request.distro, request.mappedDrives, {
+    onMappedDrive: (letter) => usedLetters.add(letter)
+  })
   const payload = rewriteOrcadMigrationPayloadPaths(
     { ...catalog, ...(hasDormantState(dormantState) ? { dormantState } : {}) },
     rewriter

@@ -93,6 +93,12 @@ describe('the move path rewriter with mapped drives', () => {
     expect(rewriter.path('file:///W:/home/me/App/x.ts', 'url')).toBe('file:///home/me/App/x.ts')
   })
 
+  it('gives a folded w:/ key back the case of the moved root holding it', () => {
+    const roots = createUncToLinuxPathRewriter('Ubuntu', [W], { linuxRoots: ['/home/me/App'] })
+    expect(roots.path('w:/home/me/app/src', 'absolute')).toBe('/home/me/App/src')
+    expect(roots.path('W:\\home\\me\\App\\Src', 'absolute')).toBe('/home/me/App/Src')
+  })
+
   it('leaves a path on an unmapped letter untouched', () => {
     expect(rewriter.path('X:\\home\\me\\App', 'absolute')).toBe('X:\\home\\me\\App')
     expect(rewriter.path('file:///X:/home/me', 'url')).toBe('file:///X:/home/me')

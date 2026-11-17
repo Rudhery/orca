@@ -41,7 +41,11 @@ export function wslMoveDesktopRewriteContext(
 ): WslMoveDesktopRewriteContext {
   return {
     cutover,
-    rewritePath: createUncToLinuxPathRewriter(cutover.manifest.source.distro, cutover.mappedDrives),
+    rewritePath: createUncToLinuxPathRewriter(
+      cutover.manifest.source.distro,
+      cutover.mappedDrives,
+      { linuxRoots: wslMoveScopeRootPaths(cutover.manifest) }
+    ),
     destinationHostId: toRuntimeExecutionHostId(cutover.destinationEnvironmentId),
     recordSeededHostWorkspaceIds: (workspaceIds) =>
       recordSeededHostWorkspaces(userDataPath, cutover.migrationId, workspaceIds)

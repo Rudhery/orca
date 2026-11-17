@@ -65,6 +65,32 @@ describe('windowsGitWorktreeVerdict', () => {
   })
 })
 
+describe('worktree records Git ignores', () => {
+  it('passes over a stray file and an entry with no `gitdir`, as Git does', async () => {
+    const repo = join(root, 'stray')
+    write(join(repo, '.git', 'worktrees', 'notes.txt'), 'x')
+    write(join(repo, '.git', 'worktrees', 'half', 'HEAD'), 'ref: refs/heads/x\n')
+    write(join(repo, '.git', 'worktrees', 'ok', 'gitdir'), '/home/me/ok/.git\n')
+    expect(await verdict(repo)).toBe('ok')
+  })
+
+  it('aborts the reads it started once the check times out', async () => {
+    let seen: AbortSignal | undefined
+    const refusals = await findWindowsGitRefusals(
+      [{ id: 'slow', path: 'W:\\slow', displayName: 'slow', badgeColor: '#000', addedAt: 0 }],
+      'Ubuntu',
+      [{ letter: 'W', share: '\\\\wsl.localhost\\Ubuntu' }],
+      (_path, _distro, signal) => {
+        seen = signal
+        return new Promise(() => {})
+      },
+      10
+    )
+    expect(Object.fromEntries(refusals)).toEqual({ slow: 'git-unreadable' })
+    expect(seen?.aborted).toBe(true)
+  })
+})
+
 describe('findWindowsGitRefusals', () => {
   const repo = (id: string, path: string): Repo => ({
     id,

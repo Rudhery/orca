@@ -2,7 +2,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { wslMoveCutoverFixture as cutover } from '../../__fixtures__/wsl-mover/wsl-move-cutover-fixture'
 import {
   clearWslMappedDriveShareCacheForTests,
@@ -18,6 +18,7 @@ import {
 
 let userDataPath: string
 beforeEach(() => {
+  vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
   userDataPath = mkdtempSync(join(tmpdir(), 'wsl-move-unread-'))
   const record = cutover('move-1', 'destination-committed', {
     mappedDrives: [{ letter: 'W', share: '\\\\wsl.localhost\\Ubuntu' }]
@@ -30,6 +31,7 @@ beforeEach(() => {
   )
 })
 afterEach(() => {
+  vi.restoreAllMocks()
   resetWslMoveFenceForTests()
   clearWslMappedDriveShareCacheForTests()
   rmSync(userDataPath, { recursive: true, force: true })
@@ -69,5 +71,13 @@ describe('an unreadable WSL move journal', () => {
     })
     loadWslMoveFence(userDataPath)
     expect(isWslMoveProjectBlocked(store, { repoId: 'moved-w' })).toBe(true)
+  })
+
+  it('never treats a drive letter as WSL off Windows', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    loadWslMoveFence(userDataPath)
+    expect(isWslMoveProjectBlocked(store, { repoId: 'moved-w' })).toBe(false)
+    expect(isWslMoveCwdFenced('W:\\home\\dev\\repo-1')).toBe(false)
+    expect(isWslMoveProjectBlocked(store, { repoId: 'unc' })).toBe(true)
   })
 })
