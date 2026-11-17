@@ -1,8 +1,7 @@
 /**
- * The profile state of UNC Windows-drive projects converted to their drive paths (D1c), or of
- * mapped-drive projects respelled to their share: each field that can name one is re-keyed by
- * wsl-drive-unc-identity-rewrite.ts. D1c projects also switch to Git for Windows with their
- * terminals still in the distro. Pure; the caller writes the result.
+ * The profile state of UNC Windows-drive projects converted to their drive paths (D1c): each field
+ * that can name one is re-keyed by wsl-drive-unc-identity-rewrite.ts, and the projects switch to
+ * Git for Windows with their terminals still in the distro. Pure; the caller writes the result.
  */
 import { composeWorktreeHostIdentity } from '../../../shared/worktree/host-qualified-identity'
 import { LOCAL_EXECUTION_HOST_ID } from '../../../shared/execution-host/execution-host'
@@ -24,11 +23,7 @@ import { withCrossStoreChildKey } from '../../../shared/worktree/lineage/cross-s
 import { WSL_DRIVE_UNC_STATE_DISPOSITIONS } from '../../../shared/wsl-move/wsl-drive-unc-state-dispositions'
 import { wslMoveRepoPaths } from '../../persistence/moving-wsl-projects/manifest-scope/wsl-move-scope'
 import { withoutDiscoveryShadows } from './wsl-drive-unc-discovery-shadows'
-import {
-  wslDriveUncRespelling,
-  type WslDriveUncRespelling,
-  type WslMappedDrive
-} from '../../../shared/wsl-move/wsl-drive-unc-respelling'
+import { wslUncDrivePathToWindows } from '../../../shared/file-access/wsl-paths'
 import {
   createWslDriveUncRewriter,
   mergeWslDriveUncKeyedEntries,
@@ -40,8 +35,6 @@ export type WslDriveUncStateScope = {
   distro: string
   repoIds: readonly string[]
   folderWorkspaceIds: readonly string[]
-  /** Set for a mapped drive respelled to its share; its runtime choices stay as they were. */
-  mappedDrive?: WslMappedDrive | null
 }
 
 export type WslDriveUncStateRewrite = {
@@ -61,12 +54,10 @@ export function rewriteWslDriveUncState(
   const state = withoutDiscoveryShadows(saved, worktreeIds)
   const rewriter = createWslDriveUncRewriter({
     distro: scope.distro,
-    mappedDrive: scope.mappedDrive,
     repoIds,
     folderWorkspaceIds,
     roots
   })
-  const respelling = wslDriveUncRespelling(scope)
   const next: PersistedState = { ...state }
   for (const [field, disposition] of Object.entries(WSL_DRIVE_UNC_STATE_DISPOSITIONS)) {
     if (disposition === 'rewrite' && isStateField(field) && state[field] !== undefined) {
@@ -81,13 +72,11 @@ export function rewriteWslDriveUncState(
   }
   next.projects = sameIfUnchanged(
     next.projects,
-    scope.mappedDrive
-      ? withPinnedRuntime(next.projects, repoIds)
-      : withWindowsGit(next.projects, repoIds, scope.distro)
+    withWindowsGit(next.projects, repoIds, scope.distro)
   )
   next.projectGroups = sameIfUnchanged(
     next.projectGroups,
-    withConvertedGroupFolders(next, repoIds, folderWorkspaceIds, respelling)
+    withConvertedGroupFolders(next, repoIds, folderWorkspaceIds, scope.distro)
   )
   next.worktreeMeta = withPriorIds(next.worktreeMeta, worktreeIds, (id) => [id])
   if (next.worktreeMetaByIdentity) {
@@ -159,7 +148,6 @@ function collectRewriteRoots(
   ]
   const ids = createWslDriveUncRewriter({
     distro: scope.distro,
-    mappedDrive: scope.mappedDrive,
     repoIds,
     folderWorkspaceIds,
     roots
@@ -252,25 +240,12 @@ function windowsGitPreference(
   return { kind: 'wsl', distro, git: 'windows-host' }
 }
 
-/**
- * A project with no saved runtime infers WSL from a share path, so respelling alone would move its
- * terminals and Git from the global default into the distro, even if the move is then cancelled.
- */
-function withPinnedRuntime(projects: Project[], repoIds: ReadonlySet<string>): Project[] {
-  return projects.map((project) =>
-    project.localWindowsRuntimePreference === undefined &&
-    project.sourceRepoIds.some((id) => repoIds.has(id))
-      ? { ...project, localWindowsRuntimePreference: { kind: 'inherit-global' } }
-      : project
-  )
-}
-
 /** A group whose projects all convert was made from their parent folder, which converts too. */
 function withConvertedGroupFolders(
   state: PersistedState,
   repoIds: ReadonlySet<string>,
   folderWorkspaceIds: ReadonlySet<string>,
-  respelling: WslDriveUncRespelling
+  distro: string
 ): PersistedState['projectGroups'] {
   return state.projectGroups.map((group) => {
     const members = [
@@ -281,7 +256,7 @@ function withConvertedGroupFolders(
         .filter((folder) => folder.projectGroupId === group.id)
         .map((folder) => folderWorkspaceIds.has(folder.id))
     ]
-    const parentPath = group.parentPath && respelling.path(group.parentPath)
+    const parentPath = group.parentPath && wslUncDrivePathToWindows(group.parentPath, distro)
     return parentPath && members.length > 0 && members.every(Boolean)
       ? { ...group, parentPath }
       : group

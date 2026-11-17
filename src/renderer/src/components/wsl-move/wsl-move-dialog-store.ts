@@ -241,6 +241,9 @@ export async function startWslMove(): Promise<void> {
     return
   }
   const { distro, selected } = dialog
+  // Main moves only if the drives still map where this preview read them.
+  const previewed = dialog.preview?.outcome === 'ready' ? dialog.preview : null
+  const mappedDrives = previewed?.mappedDrives ?? []
   ++previewToken
   setDialog({ stage: 'running', distro, selected, progress: null, cancel: 'idle' })
   const unsubscribe = window.api.wslMove.onProgress((progress) => {
@@ -253,7 +256,8 @@ export async function startWslMove(): Promise<void> {
   try {
     result = await window.api.wslMove.start({
       ...requestOf(distro, selected),
-      sleptPanes: collectWslMoveSleptPaneBindings(useAppStore.getState())
+      sleptPanes: collectWslMoveSleptPaneBindings(useAppStore.getState()),
+      mappedDrives
     })
   } catch (error) {
     // The IPC itself failed; main's own failures arrive as results.

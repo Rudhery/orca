@@ -2,18 +2,24 @@
 import { readWslHostDeployments } from '../../../../shared/remote-runtime/host-store/runtime-environment-registry'
 import { wslMoveJournalKey } from '../../../../shared/wsl-move/wsl-move-cutover'
 import { parseWslUncPath } from '../../../../shared/file-access/wsl-paths'
+import {
+  toWslDistroUncPath,
+  type WslMappedDrive
+} from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
 import type { Store } from '../../loading-store/store'
 import { isLocalWslMoveRow, wslMoveHostDistro } from './wsl-move-scope-guard'
 import { defaultWslOrcadEnvironmentId } from '../../../wsl/orcad/wsl-orcad-deploy'
 
 /**
- * A bridge project of the distro (local, on its UNC path, not moved) or its WSL host record. A
- * host file that cannot be read counts as in use: a failed read never makes a distro look gone.
+ * A bridge project of the distro (local, on its UNC path or a drive mapped into it, not moved) or
+ * its WSL host record. A host file that cannot be read counts as in use: a failed read never makes
+ * a distro look gone. Drives are read only when nothing else keeps the distro; unread, in use.
  */
 export async function isDistroInUse(
   store: Pick<Store, 'getRepos' | 'getFolderWorkspaces'>,
   userDataPath: string,
-  distro: string
+  distro: string,
+  readMappedDrives?: () => Promise<readonly WslMappedDrive[] | 'unverifiable'>
 ): Promise<boolean> {
   const environmentId = defaultWslOrcadEnvironmentId(distro)
   try {
@@ -29,10 +35,23 @@ export async function isDistroInUse(
     return true
   }
   const key = wslMoveJournalKey(distro)
-  const onDistro = (path: string): boolean => {
-    const unc = parseWslUncPath(path)
-    return unc !== null && wslMoveJournalKey(unc.distro) === key
+  const hasBridgeProject = (mappedDrives: readonly WslMappedDrive[]): boolean =>
+    hasUnmovedProjectIn(store, (path) => {
+      const unc = parseWslUncPath(toWslDistroUncPath(path, mappedDrives))
+      return unc !== null && wslMoveJournalKey(unc.distro) === key
+    })
+  const onUnc = hasBridgeProject([])
+  if (onUnc || !readMappedDrives) {
+    return onUnc
   }
+  const mappedDrives = await readMappedDrives().catch(() => 'unverifiable' as const)
+  return mappedDrives === 'unverifiable' || hasBridgeProject(mappedDrives)
+}
+
+function hasUnmovedProjectIn(
+  store: Pick<Store, 'getRepos' | 'getFolderWorkspaces'>,
+  onDistro: (path: string) => boolean
+): boolean {
   return (
     store
       .getRepos()

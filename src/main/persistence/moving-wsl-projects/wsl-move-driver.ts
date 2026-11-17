@@ -93,7 +93,15 @@ async function runMove(
   const { distro } = request
   deps.progress({ distro, step: 'preparing' })
   const startedAt = deps.now()
-  const prepared = await prepareWslMove(deps, request, migrationId, startedAt, 'finish-now')
+  // The start re-reads the mapped drives and refuses if they moved since the preview showed them.
+  const prepared = await prepareWslMove(
+    deps,
+    request,
+    migrationId,
+    startedAt,
+    'finish-now',
+    request.mappedDrives ?? []
+  )
   if ('outcome' in prepared) {
     return prepared
   }
@@ -116,7 +124,8 @@ async function runMove(
     distro,
     migrationId,
     scope.workspaceIds,
-    request.sleptPanes
+    request.sleptPanes,
+    prepared.plan.mappedDrives
   )
   try {
     const journaled = await journalSleptWslMove(deps, prepared, migrationId, startedAt, slept)
@@ -241,6 +250,7 @@ async function proveStillExited(
 ): Promise<void> {
   const proof = await deps.quiesce.proveExited({
     distro: quiesced.manifest.source.distro,
+    mappedDrives: quiesced.mappedDrives ?? [],
     workspaceKeys: prepared.scope.workspaceKeys,
     sessionIds: new Set(quiesced.provenExitedSessionIds)
   })

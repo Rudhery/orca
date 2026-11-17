@@ -13,9 +13,9 @@ import type {
 import {
   wslMoveBrowserLoginsNotCarried,
   wslMoveChatsStayCopy,
-  wslMoveRefusalMessage,
-  wslMoveScopeRefusalReason
+  wslMoveRefusalMessage
 } from './wsl-move-copy'
+import { wslMoveScopeRefusalReason } from './wsl-move-scope-refusal-copy'
 import type { WslMoveCounts, WslMoveProjectRow } from './wsl-move-scope-rows'
 import { WslMoveBlockerList, type WslMoveBlockerView } from './WslMoveBlockerList'
 

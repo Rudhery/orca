@@ -1,9 +1,8 @@
 /**
  * The re-key of a UNC Windows-drive project converting to its drive path (D1c): every identity
  * string that names one of its folders through the distro (`\\wsl.localhost\<d>\mnt\c\x`) becomes
- * the same folder's drive path (`C:\x`); for a mapped-drive conversion, `W:\x` becomes the share's
- * UNC path. Worktree ids, owner keys, PTY session ids and editor file ids are rebuilt by the
- * export's composite rewriters; user text is never touched.
+ * the same folder's drive path (`C:\x`). Worktree ids, owner keys, PTY session ids and editor file
+ * ids are rebuilt by the export's composite rewriters; user text is never touched.
  */
 import { isDeepStrictEqual } from 'node:util'
 import { normalizeRuntimePathForComparison } from '../../../shared/file-access/cross-platform-path'
@@ -25,18 +24,13 @@ import {
   rewriteOrcadMigrationPathValue,
   type OrcadMigrationPathRewriter
 } from '../../persistence/migrating-orcad-catalog/path-rewrite/orcad-migration-path-rewrite'
-import {
-  wslDriveUncRespelling,
-  type WslMappedDrive
-} from '../../../shared/wsl-move/wsl-drive-unc-respelling'
+import { wslUncDrivePathToWindows } from '../../../shared/file-access/wsl-paths'
 
 export type WslDriveUncRewriteScope = {
   distro: string
-  /** Set when the conversion takes a mapped drive's paths to its share instead. */
-  mappedDrive?: WslMappedDrive | null
   repoIds: ReadonlySet<string>
   folderWorkspaceIds: ReadonlySet<string>
-  /** The converting projects' folders as saved; a bare path is rewritten only at or under one. */
+  /** UNC folders of the converting projects; a bare path is rewritten only at or under one. */
   roots: readonly string[]
 }
 
@@ -49,27 +43,54 @@ export type WslDriveUncRewriter = {
 const VERBATIM_KEYS: ReadonlySet<string> = new Set(['priorWorktreeIds'])
 
 export function createWslDriveUncRewriter(scope: WslDriveUncRewriteScope): WslDriveUncRewriter {
-  const respelling = wslDriveUncRespelling(scope, scope.roots)
+  const fileUrl = new RegExp(
+    `^file://(?:wsl\\.localhost|wsl\\$)/${escapeRegExp(scope.distro)}(/mnt/[a-z](?:/[^?#]*)?)([?#].*)?$`,
+    'i'
+  )
+  const comparisonForm = new RegExp(
+    `^//wsl/${escapeRegExp(scope.distro.toLowerCase())}/mnt/([a-z])(/[\\s\\S]*)?$`
+  )
   const roots = scope.roots.flatMap((root) => {
-    const converted = respelling.path(root)
-    return converted ? [normalizeRuntimePathForComparison(converted)] : []
+    const drive = wslUncDrivePathToWindows(root, scope.distro)
+    return drive ? [normalizeRuntimePathForComparison(drive)] : []
   })
-  const inRoot = (convertedPath: string): boolean => {
-    const comparable = normalizeRuntimePathForComparison(convertedPath)
+  const inRoot = (drivePath: string): boolean => {
+    const comparable = normalizeRuntimePathForComparison(drivePath)
     return roots.some(
       (root) => comparable === root || comparable.startsWith(root.endsWith('/') ? root : `${root}/`)
     )
   }
-  // Any converted path: an id's owner was checked first.
+  const fileUrlDrivePath = (
+    value: string
+  ): { drive: string; tail: string; extra: string } | null => {
+    const match = fileUrl.exec(value)
+    if (!match) {
+      return null
+    }
+    const linux = safeDecode(match[1])
+    const drive = linux
+      ? wslUncDrivePathToWindows(`//wsl.localhost/${scope.distro}${linux}`, scope.distro)
+      : null
+    if (!drive) {
+      return null
+    }
+    // `/mnt/c/x` → `C:/x`, keeping the URL's own encoding of the tail.
+    const tail = match[1].slice('/mnt/c'.length)
+    return { drive, tail, extra: match[2] ?? '' }
+  }
+  // Any drive path of the distro: an id's owner was checked first.
   const drive: OrcadMigrationPathRewriter = {
     path: (value, form) => {
       if (form === 'relative') {
         return value
       }
       if (form === 'url') {
-        return respelling.fileUrl(value)?.url ?? value
+        const parsed = fileUrlDrivePath(value)
+        return parsed
+          ? `file:///${parsed.drive.slice(0, 2)}${parsed.tail || '/'}${parsed.extra}`
+          : value
       }
-      return respelling.path(value) ?? value
+      return wslUncDrivePathToWindows(value, scope.distro) ?? value
     }
   }
   const ownerInScope = (owner: string): boolean => {
@@ -84,12 +105,12 @@ export function createWslDriveUncRewriter(scope: WslDriveUncRewriteScope): WslDr
     )
   }
   const barePath = (value: string): string => {
-    // A comparison key stays one; the respelling checks its root itself.
-    const comparison = respelling.comparisonForm(value)
+    const comparison = comparisonForm.exec(value)
     if (comparison) {
-      return comparison
+      const mapped = `${comparison[1]}:${comparison[2] ?? '/'}`
+      return inRoot(mapped) ? mapped : value
     }
-    const mapped = respelling.path(value)
+    const mapped = wslUncDrivePathToWindows(value, scope.distro)
     return mapped && inRoot(mapped) ? mapped : value
   }
   const identity = (value: string): string => {
@@ -116,8 +137,8 @@ export function createWslDriveUncRewriter(scope: WslDriveUncRewriteScope): WslDr
       return ownerInScope(value) ? rewriteOrcadMigrationPathValue(value, 'owner-key', drive) : value
     }
     if (/^file:/i.test(value)) {
-      const parsed = respelling.fileUrl(value)
-      return parsed && inRoot(parsed.path) ? parsed.url : value
+      const parsed = fileUrlDrivePath(value)
+      return parsed && inRoot(parsed.drive) ? drive.path(value, 'url') : value
     }
     return barePath(value)
   }
@@ -209,4 +230,16 @@ function isEmptyValue(value: unknown): boolean {
     return value.length === 0
   }
   return typeof value === 'object' && Object.keys(value).length === 0
+}
+
+function safeDecode(value: string): string | null {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return null
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

@@ -264,8 +264,8 @@ export function isWslMoveCwdFenced(cwd: string): boolean {
   if (!fence?.readable) {
     return false
   }
-  return fence.state.fencedRoots.some(({ distro, roots }) => {
-    const path = comparableWslPath(cwd, distro)
+  return fence.state.fencedRoots.some(({ distro, roots, mappedDrives }) => {
+    const path = comparableWslPath(cwd, distro, mappedDrives)
     return path !== null && roots.some((root) => isAtOrUnder(path, root))
   })
 }

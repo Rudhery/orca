@@ -6,17 +6,14 @@
 import { normalizeRuntimePathForComparison } from '../file-access/cross-platform-path'
 import { LOCAL_EXECUTION_HOST_ID } from '../execution-host/execution-host'
 import type { PythonEnvironment } from '../editor/notebooks/notebook-kernel-types'
-import { wslDriveUncRespelling, type WslMappedDrive } from './wsl-drive-unc-respelling'
-import { splitWorktreeIdForFilesystem } from '../worktree/id'
+import { wslUncDrivePathToWindows } from '../file-access/wsl-paths'
 
 /** A converted conversion's renderer half, as main lists it. */
 export type WslDriveUncPendingRendererRewrite = {
   migrationId: string
   distro: string
-  /** Set for a mapped drive respelled to its share path. */
-  mappedDrive?: WslMappedDrive
   worktreeIds: [string, string][]
-  /** The converted projects' folders, as saved before the conversion. */
+  /** The converted projects' folders, as UNC paths. */
   rootPaths: string[]
   /** Renderer stores still to record. */
   storeIds: string[]
@@ -24,44 +21,37 @@ export type WslDriveUncPendingRendererRewrite = {
 
 export type WslDriveUncRendererKeys = {
   worktreeId: (worktreeId: string) => string | null
-  /** A path inside a converted folder, in its converted form; null for any other path. */
+  /** A path inside a converted folder, in its drive form; null for any other path. */
   path: (path: string) => string | null
-  /** A comparison-form key inside a converted folder, re-keyed in comparison form; else null. */
-  comparisonKey: (key: string) => string | null
 }
 
 export function wslDriveUncRendererKeys(
-  conversion: Pick<
-    WslDriveUncPendingRendererRewrite,
-    'distro' | 'mappedDrive' | 'worktreeIds' | 'rootPaths'
-  >
+  conversion: Pick<WslDriveUncPendingRendererRewrite, 'distro' | 'worktreeIds' | 'rootPaths'>
 ): WslDriveUncRendererKeys {
   const ids = new Map(conversion.worktreeIds)
-  // Each converted worktree's own folder too: its exact case restores a folded quick-open root.
-  const worktreeRoots = conversion.worktreeIds.flatMap(
-    ([oldId]) => splitWorktreeIdForFilesystem(oldId)?.worktreePath ?? []
-  )
-  const respelling = wslDriveUncRespelling(conversion, [...conversion.rootPaths, ...worktreeRoots])
+  const { distro } = conversion
   const roots = conversion.rootPaths.flatMap((root) => {
-    const converted = respelling.path(root)
-    return converted ? [normalizeRuntimePathForComparison(converted)] : []
+    const drive = wslUncDrivePathToWindows(root, distro)
+    return drive ? [normalizeRuntimePathForComparison(drive)] : []
   })
+  const comparisonForm = /^\/\/wsl\/([^/]+)(\/[\s\S]*)?$/
   const path = (value: string): string | null => {
-    const converted = respelling.path(value)
-    if (!converted) {
+    // Quick-open keeps its roots in comparison form, which folds both UNC spellings into this.
+    const folded = comparisonForm.exec(value)
+    const drive =
+      folded && folded[1] === distro.toLowerCase()
+        ? wslUncDrivePathToWindows(`//wsl.localhost/${distro}${folded[2] ?? '/'}`, distro)
+        : wslUncDrivePathToWindows(value, distro)
+    if (!drive) {
       return null
     }
-    const comparable = normalizeRuntimePathForComparison(converted)
+    const comparable = normalizeRuntimePathForComparison(drive)
     const inRoot = roots.some(
       (root) => comparable === root || comparable.startsWith(root.endsWith('/') ? root : `${root}/`)
     )
-    return inRoot ? converted : null
+    return inRoot ? drive : null
   }
-  return {
-    worktreeId: (worktreeId) => ids.get(worktreeId) ?? null,
-    path,
-    comparisonKey: respelling.comparisonForm
-  }
+  return { worktreeId: (worktreeId) => ids.get(worktreeId) ?? null, path }
 }
 
 function parseArray(value: string): unknown[] | null {
@@ -94,9 +84,10 @@ export function convertedQuickOpenHistoryScope(
     return null
   }
   const nextId = keys.worktreeId(worktreeId)
-  // Quick-open keeps its roots in comparison form, which folds both UNC spellings into one.
-  const nextRoot = keys.comparisonKey(root)
-  return nextId !== null && nextRoot !== null ? JSON.stringify([route, nextId, nextRoot]) : null
+  const nextRoot = keys.path(root)
+  return nextId !== null && nextRoot !== null
+    ? JSON.stringify([route, nextId, normalizeRuntimePathForComparison(nextRoot)])
+    : null
 }
 
 /** `[worktreeId, environment, sshTarget, filePath]`, as buildFileViewPreferenceKey writes it. */

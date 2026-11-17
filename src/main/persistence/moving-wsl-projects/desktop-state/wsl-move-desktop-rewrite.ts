@@ -41,7 +41,7 @@ export function wslMoveDesktopRewriteContext(
 ): WslMoveDesktopRewriteContext {
   return {
     cutover,
-    rewritePath: createUncToLinuxPathRewriter(cutover.manifest.source.distro),
+    rewritePath: createUncToLinuxPathRewriter(cutover.manifest.source.distro, cutover.mappedDrives),
     destinationHostId: toRuntimeExecutionHostId(cutover.destinationEnvironmentId),
     recordSeededHostWorkspaceIds: (workspaceIds) =>
       recordSeededHostWorkspaces(userDataPath, cutover.migrationId, workspaceIds)
@@ -229,7 +229,8 @@ export function listPendingWslMoveRendererRewrites(
           distro: source.distro,
           scopeRepoIds: [...source.scopeRepoIds],
           scopeFolderWorkspaceIds: [...source.scopeFolderWorkspaceIds],
-          scopeRootPaths: wslMoveScopeRootPaths(cutover.manifest)
+          scopeRootPaths: wslMoveScopeRootPaths(cutover.manifest),
+          ...(cutover.mappedDrives?.length ? { mappedDrives: cutover.mappedDrives } : {})
         }
       ]
     })

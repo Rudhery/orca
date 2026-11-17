@@ -27,6 +27,8 @@ import type {
   WslMoveManifestExportRequest
 } from '../manifest-scope/wsl-move-manifest-export'
 import type { WslMoveGateInputs } from '../quiescence/wsl-move-terminal-gate'
+import type { WslMappedDrive } from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
+import type { WslMappedDriveRead } from '../../../wsl/filesystem/wsl-mapped-drive-share'
 
 /** Throws `WslMoveScopeChangedError` when a planned row is gone: plan again. */
 export type WslMoveManifestExporter = (
@@ -74,6 +76,10 @@ export type WslMoveDriverDeps = {
    */
   isDistroRegistered: (distro: string, distroGuid?: string) => Promise<boolean | null>
   exportManifest: WslMoveManifestExporter
+  /** What a drive letter maps to right now, uncached; absent off Windows (no drive is mapped). */
+  readMappedDriveShare?: (letter: string) => Promise<WslMappedDriveRead>
+  /** Linked worktrees of a mapped-drive repo whose links Git for Windows wrote. */
+  windowsGitWorktrees?: (repoPath: string, distro: string) => Promise<string[]>
   /** Busy, working, automation and dispatch facts for the scope, from their owning stores. */
   gateInputs: (scope: WslMoveTerminalScope) => Promise<WslMoveGateInputs>
   /** The panes the scope's live terminals belong to; read before Sleep ends their sessions. */
@@ -104,7 +110,9 @@ export type WslMoveDriverDeps = {
     /** The scope's workspaces, for panes slept before the move (no live terminal to list). */
     workspaceIds: readonly string[],
     /** The window's bindings of slept panes, which main no longer holds; checked before use. */
-    reported: readonly WslMoveRestoreHintPane[]
+    reported: readonly WslMoveRestoreHintPane[],
+    /** The plan's mapped drives, for a checkpoint folder spelled `W:\x`. */
+    mappedDrives: readonly WslMappedDrive[]
   ) => Promise<WslMoveSleptScrollback>
   shellHistory: (
     distro: string,

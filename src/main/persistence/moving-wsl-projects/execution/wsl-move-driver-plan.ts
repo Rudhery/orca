@@ -13,6 +13,8 @@ import {
   wslMoveJournalKey
 } from '../../../../shared/wsl-move/wsl-move-cutover'
 import { wslHostsAcceptNewWork } from '../../../wsl/host-lifecycle/wsl-host-gate'
+import type { WslMappedDrive } from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
+import { readWslMoveSourceDrives } from './wsl-move-driver-source-drives'
 import { listWslMoveCutoverChain } from '../cutover-recovery/wsl-move-cutover-journal'
 
 import { type WslMovePlan, planWslMove } from '../manifest-scope/wsl-move-delta-plan'
@@ -185,7 +187,8 @@ export function exportRequestOf(
     destinationEnvironmentId: host.environmentId,
     generation: plan.generation,
     repoIds: plan.repoIds,
-    folderWorkspaceIds: plan.folderWorkspaceIds
+    folderWorkspaceIds: plan.folderWorkspaceIds,
+    ...(plan.mappedDrives?.length ? { mappedDrives: plan.mappedDrives } : {})
   }
 }
 
@@ -195,7 +198,9 @@ export async function prepareWslMove(
   migrationId: string,
   startedAt: Date,
   /** Settle an earlier move of the distro an interruption left short of commit; false leaves it. */
-  settleInterrupted: WslMoveInterruptedSettle | false = false
+  settleInterrupted: WslMoveInterruptedSettle | false = false,
+  /** At start: the mapped drives the preview showed, which must still hold. Null for a preview. */
+  expectedMappedDrives: readonly WslMappedDrive[] | null = null
 ): Promise<WslMovePrepared | WslMoveRefusal> {
   // Every new move, dialog or automatic, stops once a block is learned, even mid-run.
   if (!wslHostsAcceptNewWork()) {
@@ -232,12 +237,19 @@ export async function prepareWslMove(
     request.repoIds || request.folderWorkspaceIds
       ? { repoIds: request.repoIds ?? [], folderWorkspaceIds: request.folderWorkspaceIds ?? [] }
       : undefined
+  const catalog = deps.readCatalog()
+  const drives = await readWslMoveSourceDrives(deps, catalog, request.distro, expectedMappedDrives)
+  if ('outcome' in drives) {
+    return drives
+  }
   const planned = planWslMove(
     deps.userDataPath,
-    deps.readCatalog(),
+    catalog,
     request.distro,
     await host.readHolding(),
-    selection
+    selection,
+    drives.mappedDrives,
+    drives.windowsGitWorktreeRepoIds
   )
   if (planned.outcome === 'refused') {
     return refusal(planned.code)

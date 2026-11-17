@@ -49,7 +49,6 @@ function deps(overrides: Partial<WslDriveUncConversionRunDeps> = {}): WslDriveUn
     userDataPath: root,
     profileId: 'profile-1',
     readDriveMounts: async () => [{ mountPoint: '/mnt/c', windowsRoot: 'C:\\' }],
-    readMappedDriveShare: async () => ({ share: null }),
     readProfileState: async () => state(),
     pause: vi.fn(async () => ({ panes: [] })),
     runWindowsGit: vi.fn(async (args: string[]) =>
@@ -158,102 +157,5 @@ describe('startWslDriveUncConversion', () => {
         .map((record) => record.profileId)
         .sort()
     ).toEqual(['profile-1', 'profile-2'])
-  })
-})
-
-describe('startWslDriveUncConversion for a mapped drive', () => {
-  const SHARE = String.raw`\\wsl.localhost\Ubuntu`
-  const MAPPED = String.raw`W:\home\me\App`
-
-  function mappedState(): PersistedState {
-    const value = state()
-    value.repos = [{ id: 'repo-a', path: MAPPED, displayName: 'App', badgeColor: '', addedAt: 0 }]
-    value.folderWorkspaces = []
-    return value
-  }
-
-  const MAPPED_REQUEST = {
-    distro: 'Ubuntu',
-    repoIds: ['repo-a'],
-    mappedDriveLetter: 'w',
-    mappedDriveShare: SHARE
-  }
-
-  it('journals the respelling with the drive mapping read now, and never asks Windows Git', async () => {
-    const run = deps({
-      readProfileState: async () => mappedState(),
-      readMappedDriveShare: vi.fn(async () => ({ share: SHARE }))
-    })
-    expect(await startWslDriveUncConversion(run, MAPPED_REQUEST)).toEqual({
-      outcome: 'restarting',
-      migrationId: 'conv-1'
-    })
-    expect(run.readMappedDriveShare).toHaveBeenCalledWith('w')
-    expect(run.runWindowsGit).not.toHaveBeenCalled()
-    const [journal] = listWslDriveUncConversions(root)
-    expect(journal).toMatchObject({
-      mappedDrive: { letter: 'W', share: SHARE },
-      repoIds: ['repo-a'],
-      rootPaths: [MAPPED],
-      worktreeIds: [[`repo-a::${MAPPED}`, String.raw`repo-a::\\wsl.localhost\Ubuntu\home\me\App`]]
-    })
-    expect(run.restart).toHaveBeenCalledOnce()
-  })
-
-  it('refuses when the drive no longer maps into the distro', async () => {
-    const run = deps({
-      readProfileState: async () => mappedState(),
-      readMappedDriveShare: async () => ({ share: String.raw`\\wsl.localhost\Debian` })
-    })
-    expect(await startWslDriveUncConversion(run, MAPPED_REQUEST)).toEqual({
-      outcome: 'refused',
-      blockers: [{ kind: 'drive-not-mapped' }]
-    })
-    expect(run.pause).not.toHaveBeenCalled()
-    expect(listWslDriveUncConversions(root)).toEqual([])
-  })
-
-  it('refuses a drive remapped to another folder of the distro since the window looked', async () => {
-    const run = deps({
-      readProfileState: async () => mappedState(),
-      readMappedDriveShare: async () => ({ share: String.raw`\\wsl.localhost\Ubuntu\home` })
-    })
-    expect(await startWslDriveUncConversion(run, MAPPED_REQUEST)).toEqual({
-      outcome: 'refused',
-      blockers: [{ kind: 'drive-not-mapped' }]
-    })
-  })
-
-  it('asks to try again when Windows did not answer in time, changing nothing', async () => {
-    const run = deps({
-      readProfileState: async () => mappedState(),
-      readMappedDriveShare: async () => 'unverifiable'
-    })
-    expect(await startWslDriveUncConversion(run, MAPPED_REQUEST)).toEqual({
-      outcome: 'refused',
-      blockers: [{ kind: 'drive-unverifiable' }]
-    })
-    expect(run.pause).not.toHaveBeenCalled()
-  })
-
-  it('refuses a project already saved under its share path', async () => {
-    const run = deps({
-      readProfileState: async () => {
-        const value = mappedState()
-        value.repos.push({
-          id: 'repo-b',
-          path: String.raw`\\wsl.localhost\Ubuntu\home\me\App`,
-          displayName: 'App',
-          badgeColor: '',
-          addedAt: 0
-        })
-        return value
-      },
-      readMappedDriveShare: async () => ({ share: SHARE })
-    })
-    expect(await startWslDriveUncConversion(run, MAPPED_REQUEST)).toEqual({
-      outcome: 'refused',
-      blockers: [{ kind: 'not-convertible', id: 'repo-a', reason: 'duplicate-windows-project' }]
-    })
   })
 })

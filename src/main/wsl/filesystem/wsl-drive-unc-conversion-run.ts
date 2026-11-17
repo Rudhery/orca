@@ -1,6 +1,5 @@
 /**
- * Starts converting UNC Windows-drive projects to their drive paths (D1c), or respelling mapped-drive
- * projects to their distro share (so the WSL move can take them): check them, put their
+ * Starts converting UNC Windows-drive projects to their drive paths (D1c): check them, put their
  * terminals to sleep through the mover's pause (gate, then Sleep keeping each shell's folder),
  * journal the conversion and restart. The next startup rewrites everything before the window
  * opens (wsl-drive-unc-conversion-startup.ts); the woken panes reattach to their renamed sessions.
@@ -28,17 +27,9 @@ import { WslDriveUncKeyCollisionError } from './wsl-drive-unc-identity-rewrite'
 import {
   collectWslDriveUncScope,
   withNestedWslDriveUncProjects,
-  wslDriveUncDuplicatesSplitBy,
-  type WslDriveUncScope,
-  type WslDriveUncTarget
+  wslDriveUncDuplicatesSplitBy
 } from './wsl-drive-unc-project-scope'
-import { collectWslMappedDriveScope } from './wsl-mapped-drive-project-scope'
-import { wslMappedDriveMatches, type WslMappedDriveRead } from './wsl-mapped-drive-share'
 import { wslUncDrivePathToWindows } from '../../../shared/file-access/wsl-paths'
-import {
-  wslDriveUncRespelling,
-  type WslMappedDrive
-} from '../../../shared/wsl-move/wsl-drive-unc-respelling'
 import { rewriteWslDriveUncState, wslDriveUncRewriteRoots } from './wsl-drive-unc-state-rewrite'
 import type { WindowsDriveMount } from './wsl-guest-drive-mountinfo'
 
@@ -51,8 +42,6 @@ export type WslDriveUncConversionRunDeps = Pick<
   profileId: string
   /** The distro's Windows-drive mounts; null when unreadable, which refuses every path. */
   readDriveMounts: (distro: string) => Promise<readonly WindowsDriveMount[] | null>
-  /** Where a drive letter maps right now, never cached: this decides what gets rewritten. */
-  readMappedDriveShare: (letter: string) => Promise<WslMappedDriveRead>
   /** The saved profile, flushed first: the dry run must see what the restart will rewrite. */
   readProfileState: () => Promise<PersistedState>
   pause: (scope: WslMoveTerminalScope) => Promise<{ panes: readonly unknown[] } | WslMoveRefusal>
@@ -71,25 +60,8 @@ export async function startWslDriveUncConversion(
   if (journals.some((journal) => journal.phase === 'prepared')) {
     return refused([{ kind: 'conversion-pending' }])
   }
-  const mappedDrive = request.mappedDriveLetter ? await readMappedDrive(deps, request) : undefined
-  if (mappedDrive === 'unverifiable') {
-    return refused([{ kind: 'drive-unverifiable' }])
-  }
-  if (mappedDrive === null) {
-    return refused([{ kind: 'drive-not-mapped' }])
-  }
   const state = await deps.readProfileState()
-  const checked = mappedDrive
-    ? checkScope(state, request, collectWslMappedDriveScope(state, mappedDrive), mappedDrive)
-    : checkScope(
-        state,
-        request,
-        collectWslDriveUncScope(
-          state,
-          request.distro,
-          (await deps.readDriveMounts(request.distro)) ?? []
-        )
-      )
+  const checked = checkScope(state, request, (await deps.readDriveMounts(request.distro)) ?? [])
   if ('blockers' in checked) {
     return refused(checked.blockers)
   }
@@ -98,7 +70,6 @@ export async function startWslDriveUncConversion(
   try {
     ;({ worktreeIds } = rewriteWslDriveUncState(state, {
       distro: request.distro,
-      mappedDrive,
       repoIds,
       folderWorkspaceIds
     }))
@@ -106,8 +77,7 @@ export async function startWslDriveUncConversion(
     return refused([stateConflict(error)])
   }
   const repos = state.repos.filter((repo) => repoIds.includes(repo.id))
-  // A respelled project keeps the Git it ran; only D1c switches to Git for Windows.
-  const gitBlockers = mappedDrive ? [] : await windowsGitBlockers(deps, repos, request.distro)
+  const gitBlockers = await windowsGitBlockers(deps, repos, request.distro)
   if (gitBlockers.length > 0) {
     return refused(gitBlockers)
   }
@@ -131,7 +101,6 @@ export async function startWslDriveUncConversion(
     migrationId,
     profileId: deps.profileId,
     distro: request.distro,
-    ...(mappedDrive ? { mappedDrive } : {}),
     repoIds,
     folderWorkspaceIds,
     rootPaths: [
@@ -151,36 +120,14 @@ export async function startWslDriveUncConversion(
   return { outcome: 'restarting', migrationId }
 }
 
-/** The drive's share, read now; null when it no longer maps where the window showed. */
-async function readMappedDrive(
-  deps: Pick<WslDriveUncConversionRunDeps, 'readMappedDriveShare'>,
-  request: WslDriveUncConversionRequest
-): Promise<WslMappedDrive | null | 'unverifiable'> {
-  const letter = request.mappedDriveLetter ?? ''
-  if (!/^[A-Za-z]$/.test(letter)) {
-    return null
-  }
-  const read = await deps.readMappedDriveShare(letter)
-  if (read === 'unverifiable') {
-    return read
-  }
-  return wslMappedDriveMatches(read.share, request.distro, request.mappedDriveShare)
-    ? { letter: letter.toUpperCase(), share: read.share }
-    : null
-}
-
 function checkScope(
   state: PersistedState,
   request: WslDriveUncConversionRequest,
-  scope: WslDriveUncScope,
-  mappedDrive?: WslMappedDrive
+  mounts: readonly WindowsDriveMount[]
 ):
   | { repoIds: string[]; folderWorkspaceIds: string[] }
   | { blockers: WslDriveUncConversionBlocker[] } {
-  const toTarget: WslDriveUncTarget = wslDriveUncRespelling({
-    distro: request.distro,
-    mappedDrive
-  }).path
+  const scope = collectWslDriveUncScope(state, request.distro, mounts)
   const blockers: WslDriveUncConversionBlocker[] = []
   const pick = (ids: readonly string[], allowed: readonly string[]): string[] =>
     ids.filter((id) => {
@@ -200,15 +147,15 @@ function checkScope(
     return { blockers }
   }
   const rewriteRoots = (project: { repoIds: string[]; folderWorkspaceIds: string[] }): string[] =>
-    wslDriveUncRewriteRoots(state, { distro: request.distro, mappedDrive, ...project })
+    wslDriveUncRewriteRoots(state, { distro: request.distro, ...project })
   // Bare paths are re-keyed by folder, so a nested project's rows would move without its ids.
   const converting = withNestedWslDriveUncProjects(
     scope,
-    toTarget,
+    request.distro,
     { repoIds, folderWorkspaceIds },
     rewriteRoots
   )
-  const split = wslDriveUncDuplicatesSplitBy(state, scope, toTarget, converting, () =>
+  const split = wslDriveUncDuplicatesSplitBy(state, scope, request.distro, converting, () =>
     rewriteRoots(converting)
   )
   return split.length > 0

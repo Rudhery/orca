@@ -30,17 +30,6 @@ import { orchestrationDbFile } from '../../runtime/orchestration/db/orchestratio
 import { journalDomainDatabasePath } from '../../native-chat/agent-session-journal/database/journal-domain-database'
 import { rewriteWslDriveUncState } from './wsl-drive-unc-state-rewrite'
 import { WSL_DRIVE_UNC_STATE_DISPOSITIONS } from '../../../shared/wsl-move/wsl-drive-unc-state-dispositions'
-import type { WslMappedDriveRestartReport } from '../../../shared/wsl-move/wsl-drive-unc-conversion-types'
-import { readWslMappedDriveShareNow, type WslMappedDriveRead } from './wsl-mapped-drive-share'
-import {
-  assertMappedDriveStillMatches,
-  pausedOf,
-  profileStillNamesMappedDrive,
-  wslMappedDriveMovesDueOf,
-  wslMappedDriveRollbacksOf
-} from './wsl-mapped-drive-conversion-plan'
-
-const STARTUP_DRIVE_READ_TIMEOUT_MS = 10_000
 
 export type WslDriveUncConversionStartupDeps = {
   /** Where the journal lives. */
@@ -50,30 +39,12 @@ export type WslDriveUncConversionStartupDeps = {
   profileId: string
   stores: readonly WslDriveUncConversionStore[]
   now?: () => Date
-  /** Where a drive letter maps right now; a mapped-drive plan runs only while it still matches. */
-  readMappedDriveShare?: (letter: string) => Promise<WslMappedDriveRead>
 }
 
 export type WslDriveUncConversionOutcome =
-  | {
-      migrationId: string
-      outcome: 'converted'
-      repoIds: string[]
-      folderWorkspaceIds: string[]
-      distro?: string
-      /** Set for a mapped-drive respelling, whose projects the WSL move takes next. */
-      mappedDrive?: boolean
-      /** This run rewrote the profile; a later run only finishes outside stores. */
-      respelledThisRun?: boolean
-    }
+  | { migrationId: string; outcome: 'converted'; repoIds: string[]; folderWorkspaceIds: string[] }
   /** The profile could not be rewritten; nothing changed, and the panes stay asleep. */
-  | {
-      migrationId: string
-      outcome: 'rolled-back'
-      detail: string
-      /** Set for a mapped-drive plan, which the window reports and whose panes it wakes. */
-      mappedDrive?: { letter: string; workspaceIds: string[] }
-    }
+  | { migrationId: string; outcome: 'rolled-back'; detail: string }
   /** The profile is converted; `store` failed and retries at the next startup. */
   | { migrationId: string; outcome: 'resuming'; store: string; detail: string }
 
@@ -94,25 +65,12 @@ async function runOne(
 ): Promise<WslDriveUncConversionOutcome> {
   const { migrationId } = initial
   let record = initial
-  const advancing = record.phase === 'prepared'
-  if (advancing) {
+  if (record.phase === 'prepared') {
     try {
-      // Only a plan that hasn't touched the profile may be refused; one past its commit (a crash
-      // before the journal said so) finishes forward with the mapping it recorded.
-      if (record.mappedDrive && profileStillNamesMappedDrive(deps, record)) {
-        await assertMappedDriveStillMatches(deps, record)
-      }
       record = rewriteProfile(deps, record)
     } catch (error) {
       removeWslDriveUncConversion(deps.userDataPath, migrationId)
-      return {
-        migrationId,
-        outcome: 'rolled-back',
-        detail: describe(error),
-        ...(record.mappedDrive
-          ? { mappedDrive: { letter: record.mappedDrive.letter, workspaceIds: pausedOf(record) } }
-          : {})
-      }
+      return { migrationId, outcome: 'rolled-back', detail: describe(error) }
     }
     // Past the commit, so never a rollback: if this write fails the journal stays 'prepared', and
     // the next startup's rewrite is idempotent.
@@ -142,10 +100,7 @@ async function runOne(
     migrationId,
     outcome: 'converted',
     repoIds: record.repoIds,
-    folderWorkspaceIds: record.folderWorkspaceIds,
-    distro: record.distro,
-    ...(record.mappedDrive ? { mappedDrive: true } : {}),
-    ...(advancing ? { respelledThisRun: true } : {})
+    folderWorkspaceIds: record.folderWorkspaceIds
   }
 }
 
@@ -217,29 +172,8 @@ export function lastWslDriveUncConversionOutcomes(): WslDriveUncConversionOutcom
   return [...lastOutcomes]
 }
 
-let reportTaken = false
-
 /**
- * Once per run: a window reload must not open the move, or report a rollback, again. A rolled-back
- * plan changed nothing, so the workspaces its confirm paused are woken as the window takes this.
- */
-export function takeWslMappedDriveRestartReport(
-  wake: (worktreeId: string) => void,
-  outcomes: readonly WslDriveUncConversionOutcome[] = lastOutcomes
-): WslMappedDriveRestartReport {
-  if (reportTaken) {
-    return { moves: [], rolledBack: [] }
-  }
-  reportTaken = true
-  const rolledBack = wslMappedDriveRollbacksOf(outcomes)
-  for (const worktreeId of rolledBack.flatMap((rollback) => rollback.workspaceIds)) {
-    wake(worktreeId)
-  }
-  return { moves: wslMappedDriveMovesDueOf(outcomes), rolledBack }
-}
-
-/**
- * Startup, before the profile store opens: with nothing journaled it only lists its directories.
+ * Startup, before the profile store opens: with nothing journaled it only lists one directory.
  * Never throws; a conversion it can't finish stays journaled for the next startup. Only Windows
  * starts a conversion, but the journal alone says one is due, so this runs on any platform.
  */
@@ -257,9 +191,6 @@ export async function runPendingWslDriveUncConversions(paths: {
     }
     lastOutcomes = await runWslDriveUncConversionsAtStartup({
       ...paths,
-      // Longer than an add's wait: the distro may still be starting with the app.
-      readMappedDriveShare: (letter) =>
-        readWslMappedDriveShareNow(letter, undefined, STARTUP_DRIVE_READ_TIMEOUT_MS),
       stores: wslDriveUncConversionStores({
         daemonHistoryDir: getHistoryRoot(),
         shellHistoryRoots: [getHistoryRoot(), ...listWslHistoryRoots()],

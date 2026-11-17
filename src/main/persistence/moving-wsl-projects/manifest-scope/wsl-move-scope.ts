@@ -7,13 +7,21 @@ import type { ProjectGroup } from '../../../../shared/project/groups/project-gro
 import type { Repo } from '../../../../shared/repository/repo-types'
 import {
   isDrvfsLinuxPath,
-  resolveWslRepoWorktreeBasePath,
-  wslUncPathToLinux
+  resolveWslRepoWorktreeBasePath
 } from '../../../../shared/file-access/wsl-paths'
+import {
+  toWslDistroUncPath,
+  wslMoveSourcePathToLinux,
+  type WslMappedDrive
+} from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
 
 export type WslMoveScopeRefusal =
   /** Distro access does not make Windows-drive projects Linux-owned. */
-  'windows-drive' | 'mixed-locations' | 'not-local'
+  | 'windows-drive'
+  | 'mixed-locations'
+  | 'not-local'
+  /** Linked worktrees Git for Windows created: the host's Git can't follow their links. */
+  | 'windows-git-worktrees'
 
 export type WslMoveScope = {
   repoIds: string[]
@@ -27,15 +35,25 @@ type WslMoveScopeState = {
   projectGroups: readonly ProjectGroup[]
 }
 
-export function collectWslMoveScope(state: WslMoveScopeState, distro: string): WslMoveScope {
+export function collectWslMoveScope(
+  state: WslMoveScopeState,
+  distro: string,
+  mappedDrives: readonly WslMappedDrive[] = [],
+  /** Mapped-drive repos with worktrees Git for Windows created (wsl-move-windows-git-worktrees). */
+  windowsGitWorktreeRepoIds: ReadonlySet<string> = new Set()
+): WslMoveScope {
   const scope: WslMoveScope = { repoIds: [], folderWorkspaceIds: [], refused: [] }
+  const toLinux = (path: string): string | null =>
+    wslMoveSourcePathToLinux(path, distro, mappedDrives)
   for (const repo of state.repos) {
-    const paths = wslMoveRepoPaths(repo)
+    const paths = wslMoveMappedRepoPaths(repo, mappedDrives)
     // Partly in-distro repos must refuse visibly rather than disappear from the preview.
-    if (!paths.some((path) => wslUncPathToLinux(path, distro) !== null)) {
+    if (!paths.some((path) => toLinux(path) !== null)) {
       continue
     }
-    const reason = refusalFor(paths, distro, getRepoExecutionHostId(repo) !== 'local')
+    const reason =
+      refusalFor(paths, toLinux, getRepoExecutionHostId(repo) !== 'local') ??
+      (windowsGitWorktreeRepoIds.has(repo.id) ? 'windows-git-worktrees' : null)
     if (reason) {
       scope.refused.push({ kind: 'repo', id: repo.id, reason })
     } else {
@@ -47,14 +65,14 @@ export function collectWslMoveScope(state: WslMoveScopeState, distro: string): W
     projectGroups: [...state.projectGroups]
   }
   for (const workspace of state.folderWorkspaces) {
-    if (wslUncPathToLinux(workspace.folderPath, distro) === null) {
+    if (toLinux(workspace.folderPath) === null) {
       continue
     }
     // Isolate this row: other hosts may reuse the same folder ID.
     const remote =
       resolveFolderWorkspaceHost({ ...hostState, folderWorkspaces: [workspace] }, workspace.id)
         .kind !== 'local'
-    const reason = refusalFor([workspace.folderPath], distro, remote)
+    const reason = refusalFor([workspace.folderPath], toLinux, remote)
     if (reason) {
       scope.refused.push({ kind: 'folder-workspace', id: workspace.id, reason })
     } else {
@@ -65,13 +83,22 @@ export function collectWslMoveScope(state: WslMoveScopeState, distro: string): W
 }
 
 export function wslMoveRepoPaths(repo: Repo): string[] {
+  return wslMoveMappedRepoPaths(repo, [])
+}
+
+/** Every folder a repo names; relative and Linux bases resolve against its share spelling. */
+export function wslMoveMappedRepoPaths(
+  repo: Repo,
+  mappedDrives: readonly WslMappedDrive[]
+): string[] {
+  const repoPath = toWslDistroUncPath(repo.path, mappedDrives)
   const base = repo.worktreeBasePath
-    ? resolveWslRepoWorktreeBasePath(repo.path, repo.worktreeBasePath)
+    ? resolveWslRepoWorktreeBasePath(repoPath, repo.worktreeBasePath)
     : undefined
   return [
     repo.path,
     // Resolve relative bases before checking distro ownership.
-    ...(base ? [isRelative(base) ? posixJoinUnc(repo.path, base) : base] : []),
+    ...(base ? [isRelative(base) ? posixJoinUnc(repoPath, base) : base] : []),
     ...(repo.folderUpgradeGitRootPath ? [repo.folderUpgradeGitRootPath] : []),
     ...(repo.customWorktreeVisibilitySources ?? []).map((source) => source.rootPath),
     ...(repo.externalWorktreeInboxBaselinePaths ?? []),
@@ -90,7 +117,7 @@ function posixJoinUnc(repoUnc: string, relative: string): string {
 
 function refusalFor(
   paths: readonly string[],
-  distro: string,
+  toLinux: (path: string) => string | null,
   remote: boolean
 ): WslMoveScopeRefusal | null {
   if (remote) {
@@ -98,7 +125,7 @@ function refusalFor(
   }
   const linuxPaths: string[] = []
   for (const path of paths) {
-    const linux = wslUncPathToLinux(path, distro)
+    const linux = toLinux(path)
     if (linux === null) {
       return 'mixed-locations'
     }

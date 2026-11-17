@@ -5,6 +5,7 @@
  */
 import type { WslMoveBrowserCookieFreshPartitionReason } from './wsl-move-browser-cookie-copy'
 import type { WslMoveCutoverPhase } from './wsl-move-cutover'
+import type { WslMappedDrive } from './wsl-mapped-drive-paths'
 
 /** Which projects of a distro to move; omitted ids mean every project in the distro. */
 export type WslMoveRequest = {
@@ -13,6 +14,8 @@ export type WslMoveRequest = {
   folderWorkspaceIds?: string[]
   /** The window's bindings of panes with no live terminal: main retires a slept pane's on Sleep. */
   sleptPanes?: { paneKey: string; sessionId: string }[]
+  /** At start: the preview's `mappedDrives`; main refuses if the drives map elsewhere now. */
+  mappedDrives?: WslMappedDrive[]
 }
 
 export type WslMoveRowRef = { kind: 'repo' | 'folder'; id: string }
@@ -83,6 +86,8 @@ export type WslMovePreview =
       blockers: WslMoveBlocker[]
       /** Set when the host's browser would start signed out; listed, never a blocker (R44). */
       browserLoginsNotCarried?: WslMoveBrowserCookieFreshPartitionReason
+      /** Drive letters mapped into the distro that this preview read; the start sends them back. */
+      mappedDrives?: WslMappedDrive[]
     }
   | WslMoveRefusal
 
@@ -162,6 +167,9 @@ export type WslMoveUnfinished = {
 }
 
 export const WSL_MOVE_PROGRESS_CHANNEL = 'wslMove:progress'
+
+/** The `detail` of a refusal because Windows did not say where a project's mapped drive points. */
+export const WSL_MOVE_MAPPED_DRIVE_UNVERIFIABLE_DETAIL = 'mapped-drive-unverifiable'
 
 /** The `detail` of an earlier move committed on the host whose desktop half waits for a restart. */
 export const WSL_MOVE_FINISH_PENDING_DETAIL = 'finish-pending'

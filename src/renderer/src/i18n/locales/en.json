@@ -24772,7 +24772,8 @@
       "pauseFailed": "Orca could not pause the terminals in these projects, so nothing was moved. Paused terminals start again when you open them. Try again.",
       "scopeChanged": "A project changed while the move was getting ready, so nothing was moved. Check the projects and try again.",
       "cancelled": "Move cancelled. Nothing was moved.",
-      "finishedEarlierMove": "Orca first finished an earlier move into {{distro}}. Reload the window, then start this move again."
+      "finishedEarlierMove": "Orca first finished an earlier move into {{distro}}. Reload the window, then start this move again.",
+      "mappedDriveUnverifiable": "Orca could not check a drive letter some projects are saved on. Make sure the drive is connected, then try again."
     },
     "step": {
       "preparing": "Preparing",
@@ -24810,7 +24811,8 @@
       "windowsDrive": "Its folder is on a Windows drive, so it stays on this computer.",
       "mixedLocations": "Some of its folders are outside this distro, so it stays on this computer.",
       "notLocal": "It already runs on another host.",
-      "other": "It cannot move."
+      "other": "It cannot move.",
+      "windowsGitWorktrees": "Git for Windows created some of its worktrees, and Git on the WSL host can’t use them. Remove those worktrees, then move it."
     },
     "reloadToast": {
       "title": "Reload to finish the move"
@@ -24833,23 +24835,6 @@
         "attemptsExhausted": "it didn't complete after several tries"
       },
       "finishPending": "An earlier move to the {{distro}} host is done there. Orca finishes it here when it restarts, or now with Check again."
-    },
-    "mappedDrive": {
-      "title": "Move {{name}} to the {{distro}} host",
-      "description": "Orca opens this project through drive {{letter}}:. To move it, Orca first reopens it at {{sharePath}} and restarts. Tabs, terminals with their history, chats and settings come along. After the restart, the move opens so you can review it.",
-      "cancel": "Cancel",
-      "retry": "Try again",
-      "confirm": "Restart and continue",
-      "failed": "Orca could not reopen this project, so nothing changed.",
-      "restarting": "Restarting Orca to reopen this project…",
-      "pausing": "Pausing terminals…",
-      "restartingLabel": "Restarting…",
-      "rolledBack": {
-        "remapped": "Orca didn’t reopen your project: drive {{letter}}: now points somewhere else. Nothing changed.",
-        "unverifiable": "Orca didn’t reopen your project: it couldn’t check drive {{letter}}: in time. Nothing changed; try the move again.",
-        "expired": "Orca didn’t reopen your project from drive {{letter}}: the request was too old. Nothing changed; try the move again.",
-        "failed": "Orca couldn’t reopen your project from drive {{letter}}:. Nothing changed; try the move again."
-      }
     }
   },
   "onboarding": {
@@ -25275,17 +25260,7 @@
       "notDriveMount": "In this distro, that folder isn’t {{drivePath}}: it isn’t mounted from that Windows drive.",
       "notConvertible": "This project isn’t on a Windows drive on this computer.",
       "differingState": "Orca saved different details for this folder under both its WSL path and {{drivePath}}, so nothing changed.",
-      "projectSplit": "This project also holds a repository that isn’t converting, so nothing changed.",
-      "driveNotMapped": "That drive no longer points into this distro, so nothing changed.",
-      "windowsDriveFolder": "This folder is a Windows drive seen through WSL, so it stays on this computer.",
-      "driveUnverifiable": "Orca couldn’t check where that drive points just now, so nothing changed. Try again in a moment.",
-      "runtimeWouldChange": "Reopening this at {{drivePath}} would change where its terminals and Git run, so nothing changed. Choose its Project runtime first, or add the folder again at {{drivePath}}."
-    },
-    "mappedDrive": {
-      "notMapped": "Drive {{letter}}: no longer points into this distro, so nothing changed.",
-      "mixed": "Some of this project’s folders aren’t on drive {{letter}}:, so they can’t move with it.",
-      "notOnDrive": "This project isn’t on drive {{letter}}: on this computer.",
-      "unverifiable": "Orca couldn’t check where drive {{letter}}: points just now, so nothing changed. Try again in a moment."
+      "projectSplit": "This project also holds a repository that isn’t converting, so nothing changed."
     }
   },
   "runtime": {

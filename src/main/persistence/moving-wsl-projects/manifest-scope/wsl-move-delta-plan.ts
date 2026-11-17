@@ -16,11 +16,12 @@ import type { ProjectGroup } from '../../../../shared/project/groups/project-gro
 import type { Repo } from '../../../../shared/repository/repo-types'
 import {
   WSL_MOVE_CUTOVER_PHASES,
-  WSL_MOVE_CUTOVER_VERSION,
   isWslMoveCutoverFinished,
+  wslMoveCutoverVersionFor,
   wslMoveJournalKey,
   type WslMoveCutover
 } from '../../../../shared/wsl-move/wsl-move-cutover'
+import type { WslMappedDrive } from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
 import {
   listWslMoveCutoverChain,
   scanWslMoveCutovers,
@@ -73,6 +74,8 @@ export type WslMovePlan = {
   /** On the host with no move to show for it, e.g. after "Use on this computer again". */
   heldByHost: WslMoveRowRef[]
   refused: WslMoveScope['refused']
+  /** The drives mapped into the distro this plan read; journaled with the move. */
+  mappedDrives?: WslMappedDrive[]
 }
 
 export type WslMovePlanResult =
@@ -96,7 +99,9 @@ export function planWslMove(
   distro: string,
   host: WslMoveHostHolding,
   /** The projects the user ticked; absent means the whole distro. */
-  selection?: { repoIds: readonly string[]; folderWorkspaceIds: readonly string[] }
+  selection?: { repoIds: readonly string[]; folderWorkspaceIds: readonly string[] },
+  mappedDrives: readonly WslMappedDrive[] = [],
+  windowsGitWorktreeRepoIds: ReadonlySet<string> = new Set()
 ): WslMovePlanResult {
   const journalKey = wslMoveJournalKey(distro)
   const chain = listWslMoveCutoverChain(userDataPath, journalKey)
@@ -122,7 +127,7 @@ export function planWslMove(
       .flatMap((cutover) => wslMoveScopeRefs(cutover).map(wslMoveRowKey))
   )
   const held = new Set(refsOf(host).map(wslMoveRowKey))
-  const scope = collectWslMoveScope(state, distro)
+  const scope = collectWslMoveScope(state, distro, mappedDrives, windowsGitWorktreeRepoIds)
   const selected = (ref: WslMoveRowRef): boolean =>
     !selection ||
     (ref.kind === 'repo' ? selection.repoIds : selection.folderWorkspaceIds).includes(ref.id)
@@ -140,6 +145,21 @@ export function planWslMove(
   }
   const candidates = refsOf(scope)
   const inScope = new Set(candidates.map(wslMoveRowKey))
+  // A taken row is judged under the mapping its move read, not today's.
+  const ownerScopes = new Map<string, ReadonlySet<string>>()
+  const inOwnerScope = (owner: Readonly<WslMoveCutover>, key: string): boolean => {
+    if (!owner.mappedDrives?.length) {
+      return inScope.has(key)
+    }
+    let keys = ownerScopes.get(owner.migrationId)
+    if (!keys) {
+      keys = new Set(
+        refsOf(collectWslMoveScope(state, distro, owner.mappedDrives)).map(wslMoveRowKey)
+      )
+      ownerScopes.set(owner.migrationId, keys)
+    }
+    return keys.has(key)
+  }
   const fresh: WslMoveRowRef[] = []
   const changed: WslMoveRowRef[] = []
   const heldByHost: WslMoveRowRef[] = []
@@ -163,8 +183,9 @@ export function planWslMove(
       removed.push(ref)
     } else if (
       // Out of scope now (a path left the distro), or another identity.
-      !inScope.has(key) ||
-      wslMoveTakenRowIdentity(owner, ref) !== wslMoveLocalRowIdentity(row, distro)
+      !inOwnerScope(owner, key) ||
+      wslMoveTakenRowIdentity(owner, ref) !==
+        wslMoveLocalRowIdentity(row, distro, owner.mappedDrives)
     ) {
       changed.push(ref)
     }
@@ -190,7 +211,8 @@ export function planWslMove(
       changed,
       removed,
       heldByHost,
-      refused: scope.refused
+      refused: scope.refused,
+      mappedDrives: mappedDrives.map((drive) => ({ ...drive }))
     }
   }
 }
@@ -231,7 +253,7 @@ export function journalWslMove(args: {
   }
   const timestamp = (args.now ?? (() => new Date()))().toISOString()
   const cutover: WslMoveCutover = {
-    version: WSL_MOVE_CUTOVER_VERSION,
+    version: wslMoveCutoverVersionFor(plan.mappedDrives),
     migrationId: manifest.migrationId,
     phase: 'prepared',
     startedAt: timestamp,
@@ -242,6 +264,7 @@ export function journalWslMove(args: {
     manifestSha256: manifest.manifestSha256,
     provenExitedSessionIds: [],
     rewrittenStores: [],
+    ...(plan.mappedDrives?.length ? { mappedDrives: plan.mappedDrives } : {}),
     ...(plan.supersedesMigrationId ? { supersedesMigrationId: plan.supersedesMigrationId } : {}),
     ...(args.automationsToReenable?.length
       ? { automationsToReenable: [...args.automationsToReenable] }

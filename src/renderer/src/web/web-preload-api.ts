@@ -170,7 +170,6 @@ function createWebPreloadApi(): Omit<Partial<PreloadApi>, 'settings' | 'plugins'
     // Desktop-only: a web client never converts this computer's projects.
     wslDriveUnc: {
       convert: () => Promise.resolve({ outcome: 'refused', blockers: [] }),
-      takeMappedDriveRestartReport: () => Promise.resolve({ moves: [], rolledBack: [] }),
       listPendingRendererRewrites: () => Promise.resolve([]),
       recordStoreRewritten: () => Promise.resolve({ recorded: false, reason: 'gated-off' })
     },

@@ -10,7 +10,7 @@ import {
   LOCAL_EXECUTION_HOST_ID
 } from '../../../../shared/execution-host/execution-host'
 import { wslHostMovableDistroOfPath } from '../../../../shared/file-access/wsl-paths'
-import { wslMappedDrivePathToShare } from '../../../../shared/wsl-move/wsl-drive-unc-respelling'
+import { wslMappedDrivePathToShare } from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
 import type { Repo } from '../../../../shared/repository/repo-types'
 import type { WslMoveRowRef } from '../../../../shared/wsl-move/wsl-move-driver-types'
 import {
@@ -43,11 +43,8 @@ export function openWslMoveDialogFor(
 /** Where a local project can move: its distro's host, spelled as the host names the distro. */
 export type WslMoveTarget = {
   distro: string
-  /**
-   * Saved under a drive letter mapped to the distro's share: the move reopens it there first.
-   * `share` is the drive's own share, `sharePath` the project's folder on it.
-   */
-  mappedDrive?: { letter: string; share: string; sharePath: string }
+  /** Saved under a drive letter mapped to the distro's share; main reads that mapping itself. */
+  viaMappedDrive?: boolean
 }
 
 const DRIVE_PATH = /^[A-Za-z]:[\\/]/
@@ -116,9 +113,7 @@ export function wslMoveTargetOfPath(
   if (!host) {
     return null
   }
-  return sharePath && share
-    ? { distro: host.distro, mappedDrive: { letter, share, sharePath } }
-    : { distro: host.distro }
+  return sharePath ? { distro: host.distro, viaMappedDrive: true } : { distro: host.distro }
 }
 
 /** The distro host a local WSL repo can move to, or null where no move is offered. */

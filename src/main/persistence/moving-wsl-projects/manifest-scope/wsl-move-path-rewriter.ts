@@ -1,23 +1,33 @@
-// Convert only the moved distro's UNC paths; unrelated paths remain unchanged.
-import { wslUncPathToLinux } from '../../../../shared/file-access/wsl-paths'
+// Convert only the moved distro's UNC and mapped-drive paths; unrelated paths remain unchanged.
+import {
+  wslMappedDriveFileUrlToLinux,
+  wslMoveSourcePathToLinux,
+  type WslMappedDrive
+} from '../../../../shared/wsl-move/wsl-mapped-drive-paths'
 import type { OrcadMigrationPathRewriter } from '../../migrating-orcad-catalog/path-rewrite/orcad-migration-path-rewrite'
 
-export function createUncToLinuxPathRewriter(distro: string): OrcadMigrationPathRewriter {
+export function createUncToLinuxPathRewriter(
+  distro: string,
+  mappedDrives: readonly WslMappedDrive[] = []
+): OrcadMigrationPathRewriter {
   const fileUrl = new RegExp(`^file://(?:wsl\\.localhost|wsl\\$)/([^/]+)(/.*)?$`, 'i')
+  const toLinux = (value: string): string | null =>
+    wslMoveSourcePathToLinux(value, distro, mappedDrives)
   return {
     path: (value, form) => {
       switch (form) {
         case 'absolute':
-          return wslUncPathToLinux(value, distro) ?? value
+          return toLinux(value) ?? value
         case 'maybe-absolute':
-          return wslUncPathToLinux(value, distro) ?? (isRelative(value) ? toPosix(value) : value)
+          return toLinux(value) ?? (isRelative(value) ? toPosix(value) : value)
         case 'relative':
           return toPosix(value)
         case 'url': {
           const match = fileUrl.exec(value)
-          return match && decodeSegment(match[1]).toLowerCase() === distro.toLowerCase()
-            ? `file://${match[2] ?? '/'}`
-            : value
+          if (match && decodeSegment(match[1]).toLowerCase() === distro.toLowerCase()) {
+            return `file://${match[2] ?? '/'}`
+          }
+          return wslMappedDriveFileUrlToLinux(value, distro, mappedDrives) ?? value
         }
       }
     }
